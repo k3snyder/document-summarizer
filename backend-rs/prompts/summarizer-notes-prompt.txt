@@ -1,0 +1,7 @@
+You are tasked with accurately summarizing the key information from the provided transcript chunk. Capture essential points, facts, names, numbers, conclusions, and takeaways without adding information not present in the original text.
+
+Here is the section you need to summarize:
+
+""" {chunk} """
+
+Format your summary as bullet points starting with * followed by a space. Each bullet must be a complete, accurate sentence.

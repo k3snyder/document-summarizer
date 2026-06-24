@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend-rs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend-rs
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Clippy (advisory)
+        run: cargo clippy --workspace --all-targets
+        continue-on-error: true
+
+      - name: Build
+        run: cargo build --workspace
+
+      # Unit tests only. Integration tests under backend-rs/tests/fixtures
+      # (golden, pptx) require binary/Python baseline fixtures that are not
+      # included in this repository, and PDF integration tests are gated behind
+      # RUN_PDFIUM_TESTS=1 + PDFIUM_LIB_PATH.
+      - name: Unit tests
+        run: cargo test --workspace --lib
+
+  frontend:
+    name: Frontend (desktop)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (tsc + vite)
+        run: npm run build
+
+      - name: Lint (advisory)
+        run: npm run lint
+        continue-on-error: true

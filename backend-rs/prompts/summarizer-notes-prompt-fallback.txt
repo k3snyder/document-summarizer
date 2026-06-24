@@ -1,0 +1,5 @@
+Summarize the following source text into accurate bullet points. Preserve names, numbers, and concrete claims. Do not infer facts that are not present.
+
+""" {chunk} """
+
+Return only bullet points beginning with *.

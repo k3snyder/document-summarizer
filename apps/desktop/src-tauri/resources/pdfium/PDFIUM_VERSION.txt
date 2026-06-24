@@ -1,0 +1,16 @@
+Bundled PDFium library manifest
+
+File: libpdfium.dylib
+Platform: macOS arm64
+SHA-256: 40720223c09c96b894faa4d6b22fb78a1675b160f10402a25b79d3e31763eba1
+Source URL: not recorded for the committed binary.
+
+Repository runtime dependency: pdfium-auto 0.3.0, which defaults to Chromium/PDFium 7690 when it downloads PDFium for non-bundled local runs.
+
+File: pdfium.dll
+Platform: Windows x64
+PDFium build/version: Chromium/PDFium 7690
+Source URL: https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7690/pdfium-win-x64.tgz
+SHA-256: 15df9dddd81eddc5a177946aa5e34cda821ebc46a51440ecb607f91e99644895
+
+When replacing this library, record the upstream source URL, Chromium/PDFium build number, target platform, and SHA-256 here.

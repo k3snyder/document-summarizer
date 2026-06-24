@@ -1,0 +1,255 @@
+<instructions>
+Analyze this document page image and extract ALL readable page content.
+
+This image may be a scanned or image-only PDF page with no selectable text. In that case, your primary job is OCR-style transcription: copy the visible body text verbatim and preserve reading order.
+</instructions>
+
+<approach>
+1. SCAN: Determine whether the page is mostly prose text, a table, a diagram/chart, or mixed content
+2. TRANSCRIBE: Pull ALL readable text verbatim in natural reading order, including headings, body text, footnotes, page numbers, captions, text boxes, callouts, legends, annotations, and notes
+3. VERIFY: Confirm each extraction is actually visible
+4. RE-SCAN DIAGRAMS: Look again specifically for text boxes, callout annotations, legend items, and step descriptions - these are commonly missed
+5. OUTPUT: Structure results in the format below
+</approach>
+
+<guardrails>
+- Extract ONLY what is explicitly visible. NEVER interpolate or guess.
+- If unclear, mark as [UNCLEAR: ~estimate] or omit entirely.
+- Include missing/absent data as null, not fabricated values.
+- Do not guess counts before observing. List items first, then count.
+- Do not answer "No significant visual elements detected" for a page that contains readable text. Transcribe the text.
+</guardrails>
+
+<examples>
+<example>
+<input>
+Document page with a bar chart showing quarterly revenue and an architecture diagram with callout boxes.
+</input>
+<output>
+## Visual Elements Detected
+bar chart, architecture diagram, callouts
+
+## Charts & Data Visualizations
+
+### Chart: Q3 2024 Revenue by Region
+- **Type**: Horizontal bar chart
+- **Axes**: X: Revenue ($M), 0-50; Y: Region names
+
+| Region | Revenue |
+|--------|---------|
+| North America | $42.3M |
+| EMEA | $31.7M |
+| APAC | $28.1M |
+| LATAM | [UNCLEAR: ~$12-15M] |
+
+- **Legend**: None (single series)
+- **Insights**: NA leads at $42.3M; LATAM value partially obscured
+
+## Diagrams & Flowcharts
+
+### Diagram: System Architecture
+- **Type**: Architecture diagram
+
+**Nodes:**
+| ID | Label | Type | Visual |
+|----|-------|------|--------|
+| n1 | Client App | process | rectangle, blue |
+| n2 | API Gateway | process | rectangle, green |
+| n3 | Database | data store | cylinder, gray |
+
+**Edges:**
+| Source | Target | Relation | Label |
+|--------|--------|----------|-------|
+| n1 | n2 | → | HTTPS |
+| n2 | n3 | → | Query |
+
+**Groups/Boundaries:**
+| Label | Contains | Visual |
+|-------|----------|--------|
+| Secure Zone | n2, n3 | dashed, red |
+
+**Flow:** n1 → n2 → n3
+
+**Text Annotations & Callouts:**
+- **Callout boxes**: "Stateless operations. No data persisted in this layer."
+- **Legend items**: "🔒 Connections secured by TLS 1.3", "📊 Automated logging enabled"
+- **Notes/Disclaimers**: "All data encrypted at rest and in transit"
+- **Step descriptions**: "1. Client initiates request", "2. Gateway validates token", "3. Query executed"
+
+## Verification
+- Extracted values: 4 revenue figures (3 clear, 1 unclear)
+- Node count: 3 listed, 3 visible ✓
+- Edge count: 2 listed, 2 visible ✓
+- Text annotations: 3 callout items, 2 legend items, 1 note, 3 steps ✓
+</output>
+</example>
+
+<example>
+<input>
+Document page with body text and a company logo. No charts or diagrams.
+</input>
+<output>
+## Transcribed Text
+[Full visible body text in reading order.]
+
+## Images & Graphical Elements
+- **Logo**: Acme Corp logo, top-left header, ~100x40px
+
+## Verification
+- Transcribed text: visible body text copied
+- Visual elements: 1 logo identified, 1 visible ✓
+</output>
+</example>
+</examples>
+
+---
+
+<output_format>
+Provide structured Markdown. **OMIT sections with no content** - never write "None detected."
+
+## Transcribed Text
+[Copy ALL readable page text verbatim in natural reading order. Include headings, paragraphs, footnotes, captions, and page numbers. Use [UNCLEAR: ...] for unreadable words. Omit this section only if there is truly no readable text.]
+
+## Visual Elements Detected
+[One line: list types found - prose text, chart, diagram, table, image, logo, or "none"]
+
+## Charts & Data Visualizations
+
+### Chart: [Title]
+- **Type**: [bar/line/pie/scatter/histogram/area]
+- **Axes**: [X: label, range; Y: label, range]
+
+| [X-Label] | [Y-Label] |
+|-----------|-----------|
+| [exact value] | [exact value] |
+
+- **Legend**: [items and meanings]
+- **Insights**: [trends, peaks, comparisons - ONLY from visible data]
+
+## Tables
+
+### Table: [Title or context]
+| Col 1 | Col 2 | Col 3 |
+|-------|-------|-------|
+| value | value | value |
+
+- **Visual formatting**: [colors, highlights, merged cells]
+- **Patterns**: [sorting, grouping, totals]
+
+## Diagrams & Flowcharts
+
+### Diagram: [Title]
+- **Type**: [flowchart/architecture/network/sequence/org chart/process]
+
+**Nodes:**
+| ID | Label | Type | Visual |
+|----|-------|------|--------|
+| n1 | [exact text] | [category] | [shape/color] |
+
+**Edges:**
+| Source | Target | Relation | Label |
+|--------|--------|----------|-------|
+| n1 | n2 | [verb] | [text] |
+
+**Groups/Boundaries:**
+| Label | Contains | Visual |
+|-------|----------|--------|
+| [name] | n1, n2 | [dashed/solid, color] |
+
+**Flow:** [if sequential: n1 → n2 → n3]
+
+**Text Annotations & Callouts:**
+[CRITICAL: Capture ALL text visible within the diagram that is not a node label]
+- **Callout boxes**: [exact text from any text boxes, speech bubbles, or annotation boxes]
+- **Legend items**: [text descriptions accompanying icons or symbols]
+- **Notes/Disclaimers**: [any explanatory text, warnings, or footnotes within the diagram]
+- **Step descriptions**: [numbered steps with their full text descriptions]
+- **Boundary labels**: [full text labels on regions, zones, or boundaries]
+
+## Images & Graphical Elements
+- **Photos/Illustrations**: [subject, context, position]
+- **Logos/Icons**: [identity, meaning, position]
+- **Annotations**: [highlights, handwriting, stamps]
+- **Layout**: [headers, sidebars, callouts]
+
+## Numeric Data
+[ALL visible numbers with context]
+- **Percentages**: [value with label]
+- **Currency**: [amount with context]
+- **Measurements**: [value with unit]
+- **Dates**: [specific dates/periods]
+- **Counts**: [quantities with context]
+
+## Verification
+[Required - confirm your extractions]
+- Extracted values: [count] items, [count] clearly visible, [count] unclear
+- Nodes/rows counted: [X] listed, [X] visible
+- Flagged items: [list any UNCLEAR markers]
+</output_format>
+
+---
+
+<critical_rules>
+1. **EXACT VALUES ONLY**
+   ✅ "Q1: $42,500, Q2: $51,200"
+   ❌ "Sales showing growth trend"
+
+2. **PRESERVE ORIGINAL TEXT**
+   ✅ Copy labels, titles verbatim
+   ❌ Paraphrase or interpret
+
+3. **NEVER HALLUCINATE**
+   ✅ "[UNCLEAR: ~20-25%]" or omit
+   ❌ Inventing plausible numbers
+
+4. **COUNT AFTER LISTING**
+   ✅ "Nodes: [list all]. Total: 4"
+   ❌ "The four components are..."
+
+5. **STRUCTURE OVER PROSE**
+   ✅ Node-edge tables for diagrams
+   ❌ Paragraph descriptions of connections
+
+6. **REPORT, DON'T INTERPRET**
+   ✅ "Red line shows 15% increase"
+   ❌ "Company is performing well"
+
+7. **VERIFY BEFORE OUTPUT**
+   For each extraction, confirm: "Is this actually visible?" → YES required
+
+8. **CAPTURE ALL TEXT IN DIAGRAMS** (commonly missed!)
+   ✅ Extract text boxes: "Stateless operations. No customer data persisted."
+   ✅ Extract legends: "🔒 Connections secured by HTTPS"
+   ✅ Extract step descriptions: "1. User initiates request from application"
+   ✅ Extract notes/disclaimers within diagram boundaries
+   ❌ Only capturing node labels while ignoring callout boxes and annotations
+
+9. **OCR SCANNED TEXT PAGES**
+   ✅ For scanned book/report pages, transcribe the visible prose text even when there are no charts or diagrams
+   ✅ Preserve paragraph order and visible headings
+   ❌ Returning "No significant visual elements detected" when the page contains readable text
+</critical_rules>
+
+<verification_protocol>
+Before finalizing output, complete these checks:
+
+□ Binary fact-check: Every value I listed is visible in the image
+□ Count verification: Items counted AFTER listing, counts match
+□ Label accuracy: Text copied character-by-character, watched for 0/O, 1/l/I
+□ Completeness: Re-scanned image, no visual elements missed
+□ Hallucination guard: No inferred data, no "filled in" blanks
+□ TEXT WITHIN DIAGRAMS: Did I capture ALL text boxes, callouts, legends, notes, and annotations visible inside diagrams? (This is commonly missed!)
+□ Boundary/region labels: Did I capture the FULL text of any labels on boundaries, zones, or regions?
+</verification_protocol>
+
+---
+
+<text_only_page>
+If no significant visual elements exist beyond plain text:
+
+**No significant visual elements detected.**
+</text_only_page>
+
+<final_constraint>
+OUTPUT ONLY the structured markdown above. No conversational text, apologies, or explanations outside the specified sections.
+</final_constraint>

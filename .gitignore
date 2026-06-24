@@ -1,0 +1,14 @@
+# Rust build output
+/target/
+**/target/
+
+# Node / frontend build output
+node_modules/
+apps/desktop/dist/
+
+# Packaged release artifacts (distributed via GitHub Releases)
+/release/
+
+# OS / editor noise
+.DS_Store
+*.log

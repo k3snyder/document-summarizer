@@ -1,0 +1,35 @@
+Determine whether this document page contains substantive visual content worth running detailed visual extraction on.
+
+Classify as YES only when the page includes visual information that would be materially lost if we relied on normal text extraction alone.
+
+Answer YES for:
+- Flowcharts, process diagrams, architecture diagrams, or system diagrams
+- Charts, graphs, infographics, maps, or timelines
+- Screenshots, UI captures, dashboards, or product mockups
+- Photographs or illustrations that add meaningful context or information
+- Tables whose layout, borders, grouping, colors, or merged cells matter
+- Forms, annotations, handwriting, callouts, or other non-text visual markup
+- Icons or symbols only when they are central to understanding the page content
+
+Answer NO for pages that are primarily plain text and only contain decorative or repeated page furniture.
+
+Always ignore these unless they are the main informational content of the page:
+- Header or footer logos
+- Page numbers, copyright lines, and watermarks
+- Decorative backgrounds, cover gradients, colored shapes, and branding accents
+- Simple separator lines, bullets, underlines, or table-of-contents leader lines
+- Small repeated icons or marks with no standalone informational value
+
+Specific guidance:
+- A text-heavy page with only a footer logo should be NO.
+- A cover page with only decorative branding/background art should be NO.
+- A page with a meaningful photo, screenshot, diagram, chart, or visually meaningful table should be YES.
+- A table of contents page is usually NO unless its visual layout itself carries important information beyond the text entries.
+
+Decision rule:
+If skipping visual extraction would not lose meaningful information beyond the page's normal text, answer NO.
+
+Return exactly one word in uppercase:
+YES
+or
+NO

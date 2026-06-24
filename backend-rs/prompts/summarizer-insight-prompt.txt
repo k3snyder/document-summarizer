@@ -1,0 +1,9 @@
+Use the source context and existing notes to extract additional high-value insights, implications, relationships, and important takeaways that are grounded in the source.
+
+Source context:
+<<CONTEXT>>
+
+Existing notes:
+<<NOTES>>
+
+Return only bullet points beginning with *.

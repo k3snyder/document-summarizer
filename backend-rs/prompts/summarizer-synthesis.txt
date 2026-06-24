@@ -1,0 +1,5 @@
+Synthesize the following three independent note extractions into one accurate, non-duplicative bullet list. Preserve concrete names, numbers, and claims. Do not add facts that are not present in the extractions.
+
+<<EXTRACTIONS>>
+
+Return only bullet points beginning with *.
