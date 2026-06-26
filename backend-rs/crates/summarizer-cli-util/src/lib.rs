@@ -15,6 +15,57 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
+/// Controls how often a transient CLI failure (timeout, spawn failure, crash)
+/// is re-attempted before giving up, with exponential backoff between tries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetryPolicy {
+    pub max_attempts: u32,
+    pub initial_backoff: Duration,
+    pub max_backoff: Duration,
+}
+
+impl RetryPolicy {
+    /// `max_attempts` is the total number of tries (so `1` disables retrying).
+    /// Zero is treated as a single attempt.
+    pub const fn new(max_attempts: u32) -> Self {
+        Self {
+            max_attempts: if max_attempts == 0 { 1 } else { max_attempts },
+            initial_backoff: Duration::from_secs(2),
+            max_backoff: Duration::from_secs(8),
+        }
+    }
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self::new(3)
+    }
+}
+
+/// Internal per-attempt error that records whether the failure is worth
+/// retrying. Structural failures (missing stdio handles) are not retryable;
+/// timeouts, spawn failures, non-zero exits, and I/O errors are.
+struct AttemptError {
+    message: String,
+    retryable: bool,
+}
+
+impl AttemptError {
+    fn retryable(message: String) -> Self {
+        Self {
+            message,
+            retryable: true,
+        }
+    }
+
+    fn fatal(message: String) -> Self {
+        Self {
+            message,
+            retryable: false,
+        }
+    }
+}
+
 pub fn suppress_command_window(command: &mut std::process::Command) {
     #[cfg(windows)]
     {
@@ -43,40 +94,93 @@ pub fn suppress_tokio_command_window(command: &mut Command) {
     }
 }
 
+/// Run a CLI command once. Retains the original single-shot behavior; callers
+/// that want transient-failure resilience should use
+/// [`run_cli_command_with_retry`].
 pub async fn run_cli_command(
-    mut command: Command,
+    command: Command,
     stdin_text: &str,
     context: &str,
     timeout_seconds: u64,
     label: &str,
 ) -> Result<CommandOutput, String> {
+    run_cli_command_once(command, stdin_text, context, timeout_seconds, label)
+        .await
+        .map_err(|err| err.message)
+}
+
+/// Run a CLI command, re-attempting transient failures (timeouts, spawn
+/// failures, crashes) according to `policy` with exponential backoff. A fresh
+/// `Command` is built per attempt via `make_command` because `Command` is
+/// consumed on spawn. Structural failures and the final attempt are returned
+/// verbatim; the final message is tagged with the attempt count.
+pub async fn run_cli_command_with_retry<F>(
+    make_command: F,
+    stdin_text: &str,
+    context: &str,
+    timeout_seconds: u64,
+    label: &str,
+    policy: RetryPolicy,
+) -> Result<CommandOutput, String>
+where
+    F: Fn() -> Command,
+{
+    let mut attempt = 1;
+    let mut backoff = policy.initial_backoff;
+    loop {
+        match run_cli_command_once(make_command(), stdin_text, context, timeout_seconds, label)
+            .await
+        {
+            Ok(output) => return Ok(output),
+            Err(err) => {
+                if !err.retryable || attempt >= policy.max_attempts {
+                    if attempt > 1 {
+                        return Err(format!("{} (failed after {attempt} attempts)", err.message));
+                    }
+                    return Err(err.message);
+                }
+                sleep(backoff).await;
+                backoff = (backoff * 2).min(policy.max_backoff);
+                attempt += 1;
+            }
+        }
+    }
+}
+
+async fn run_cli_command_once(
+    mut command: Command,
+    stdin_text: &str,
+    context: &str,
+    timeout_seconds: u64,
+    label: &str,
+) -> Result<CommandOutput, AttemptError> {
     suppress_tokio_command_window(&mut command);
     prepend_executable_dir_to_path(&mut command);
     command.kill_on_drop(true);
     let mut child = command.spawn().map_err(|err| {
-        format!(
+        AttemptError::retryable(format!(
             "could not start {label}: {err}; {context}; {}",
             unavailable_output("process did not start")
-        )
+        ))
     })?;
 
     let mut stdin = child.stdin.take().ok_or_else(|| {
-        format!(
+        AttemptError::fatal(format!(
             "{label} stdin unavailable; {context}; {}",
             unavailable_output("stdin unavailable")
-        )
+        ))
     })?;
     let mut stdout = child.stdout.take().ok_or_else(|| {
-        format!(
+        AttemptError::fatal(format!(
             "{label} stdout unavailable; {context}; {}",
             unavailable_output("stdout unavailable")
-        )
+        ))
     })?;
     let mut stderr = child.stderr.take().ok_or_else(|| {
-        format!(
+        AttemptError::fatal(format!(
             "{label} stderr unavailable; {context}; {}",
             unavailable_output("stderr unavailable")
-        )
+        ))
     })?;
 
     let stdin_text = stdin_text.to_string();
@@ -95,48 +199,48 @@ pub async fn run_cli_command(
 
     let status = tokio::select! {
         result = child.wait() => result.map_err(|err| {
-            format!(
+            AttemptError::retryable(format!(
                 "{label} failed while waiting for output: {err}; {context}; {}",
                 unavailable_output("wait failed")
-            )
+            ))
         })?,
         _ = sleep(Duration::from_secs(timeout_seconds)) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err(format!(
+            return Err(AttemptError::retryable(format!(
                 "{label} timed out; {context}; {}",
                 unavailable_output("process timed out")
-            ));
+            )));
         }
     };
 
     let stdout_bytes = stdout_reader
         .await
         .map_err(|err| {
-            format!(
+            AttemptError::retryable(format!(
                 "{label} stdout reader failed: {err}; {context}; {}",
                 unavailable_output("stdout reader failed")
-            )
+            ))
         })?
         .map_err(|err| {
-            format!(
+            AttemptError::retryable(format!(
                 "{label} stdout read failed: {err}; {context}; {}",
                 unavailable_output("stdout read failed")
-            )
+            ))
         })?;
     let stderr_bytes = stderr_reader
         .await
         .map_err(|err| {
-            format!(
+            AttemptError::retryable(format!(
                 "{label} stderr reader failed: {err}; {context}; {}",
                 unavailable_output("stderr reader failed")
-            )
+            ))
         })?
         .map_err(|err| {
-            format!(
+            AttemptError::retryable(format!(
                 "{label} stderr read failed: {err}; {context}; {}",
                 unavailable_output("stderr read failed")
-            )
+            ))
         })?;
     let output = CommandOutput {
         stdout: String::from_utf8_lossy(&stdout_bytes).trim().to_string(),
@@ -144,24 +248,24 @@ pub async fn run_cli_command(
     };
 
     let write_result = writer.await.map_err(|err| {
-        format!(
+        AttemptError::retryable(format!(
             "{label} stdin writer failed: {err}; {context}; {}",
             command_output(&output)
-        )
+        ))
     })?;
 
     if !status.success() {
-        return Err(format!(
+        return Err(AttemptError::retryable(format!(
             "{label} exited with {status}; {context}; {}{}",
             command_output(&output),
             write_error_suffix(&write_result)
-        ));
+        )));
     }
     write_result.map_err(|err| {
-        format!(
+        AttemptError::retryable(format!(
             "{label} stdin write failed: {err}; {context}; {}",
             command_output(&output)
-        )
+        ))
     })?;
 
     Ok(output)
@@ -573,7 +677,7 @@ mod tests {
     use super::{
         cli_command_context, configure_isolated_grok_command, copy_grok_auth, parse_codex_jsonl,
         parse_grok_json, resolve_cli_executable_with_extra_dirs, run_cli_command,
-        ISOLATED_GROK_CONFIG,
+        run_cli_command_with_retry, RetryPolicy, ISOLATED_GROK_CONFIG,
     };
     use std::collections::HashMap;
     #[cfg(unix)]
@@ -611,6 +715,71 @@ mod tests {
 
         assert!(started.elapsed().as_secs() < 5);
         assert!(error.contains("test CLI timed out"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn retry_recovers_after_transient_failure() {
+        // Script exits non-zero on the first invocation, succeeds on the second.
+        let temp = tempfile::tempdir().unwrap();
+        let counter = temp.path().join("count");
+        let script = format!(
+            "n=$(cat '{c}' 2>/dev/null || echo 0); n=$((n+1)); echo \"$n\" > '{c}'; \
+             if [ \"$n\" -lt 2 ]; then echo flaky >&2; exit 1; fi; echo recovered",
+            c = counter.display()
+        );
+        let policy = RetryPolicy {
+            max_attempts: 3,
+            initial_backoff: Duration::from_millis(5),
+            max_backoff: Duration::from_millis(10),
+        };
+        let make = || {
+            let mut command = Command::new("sh");
+            command
+                .arg("-c")
+                .arg(&script)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command
+        };
+
+        let output = run_cli_command_with_retry(make, "", "ctx", 5, "test CLI", policy)
+            .await
+            .unwrap();
+
+        assert_eq!(output.stdout, "recovered");
+        let attempts = std::fs::read_to_string(&counter).unwrap();
+        assert_eq!(attempts.trim(), "2");
+    }
+
+    #[tokio::test]
+    async fn retry_exhausts_and_reports_attempt_count() {
+        let (_command, executable, args) = slow_command();
+        let policy = RetryPolicy {
+            max_attempts: 2,
+            initial_backoff: std::time::Duration::from_millis(5),
+            max_backoff: std::time::Duration::from_millis(10),
+        };
+        let context = cli_command_context("test CLI", executable, &args, 1);
+        let make = || {
+            let (mut command, _, _) = slow_command();
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command
+        };
+        let started = Instant::now();
+
+        let error = run_cli_command_with_retry(make, "", &context, 1, "test CLI", policy)
+            .await
+            .unwrap_err();
+
+        // Two 1s timeouts plus tiny backoff, well under the slow child's 10s sleep.
+        assert!(started.elapsed().as_secs() < 6);
+        assert!(error.contains("test CLI timed out"));
+        assert!(error.contains("failed after 2 attempts"));
     }
 
     #[test]

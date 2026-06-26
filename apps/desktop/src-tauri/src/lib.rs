@@ -1488,6 +1488,7 @@ fn cli_runtime_config(
         executable: resolved_cli_executable_value(&settings.executable),
         args: split_cli_args(&args(settings)),
         timeout_seconds: settings.timeout_seconds,
+        retries: summarizer_pipeline::DEFAULT_CLI_RETRIES,
     }
 }
 

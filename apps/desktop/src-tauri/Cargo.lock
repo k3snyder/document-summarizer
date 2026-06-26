@@ -987,7 +987,7 @@ dependencies = [
 
 [[package]]
 name = "document-summarizer-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -4169,7 +4169,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "summarizer-cli-util"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde_json",
  "tokio",
@@ -4177,7 +4177,7 @@ dependencies = [
 
 [[package]]
 name = "summarizer-extraction"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "image",
@@ -4196,7 +4196,7 @@ dependencies = [
 
 [[package]]
 name = "summarizer-pipeline"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -4211,7 +4211,7 @@ dependencies = [
 
 [[package]]
 name = "summarizer-summarization"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "reqwest 0.12.28",
@@ -4226,7 +4226,7 @@ dependencies = [
 
 [[package]]
 name = "summarizer-types"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -4237,7 +4237,7 @@ dependencies = [
 
 [[package]]
 name = "summarizer-vision"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

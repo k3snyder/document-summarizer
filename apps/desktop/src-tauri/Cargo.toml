@@ -1,6 +1,6 @@
 [package]
 name = "document-summarizer-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Document Summarizer desktop app"
 authors = ["Document Summarizer"]
 edition = "2021"

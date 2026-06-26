@@ -91,11 +91,17 @@ pub struct GeminiProviderConfig {
     pub vision_model: String,
 }
 
+/// Default number of total attempts for a CLI provider call (timeouts, crashes,
+/// and spawn failures are retried with exponential backoff up to this many
+/// tries). Overridable per provider via `*_CLI_RETRIES` env vars.
+pub const DEFAULT_CLI_RETRIES: u32 = 3;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliRuntimeConfig {
     pub executable: String,
     pub args: Vec<String>,
     pub timeout_seconds: u64,
+    pub retries: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,16 +161,19 @@ impl PipelineProviderConfig {
                 executable: env_or("CODEX_CLI_BIN", "codex"),
                 args: env_args("CODEX_CLI_ARGS"),
                 timeout_seconds: env_u64("CODEX_CLI_TIMEOUT", 600),
+                retries: env_u32("CODEX_CLI_RETRIES", DEFAULT_CLI_RETRIES),
             },
             claude: CliRuntimeConfig {
                 executable: env_or("CLAUDE_CLI_BIN", "claude"),
                 args: env_args("CLAUDE_CLI_ARGS"),
                 timeout_seconds: env_u64("CLAUDE_CLI_TIMEOUT", 600),
+                retries: env_u32("CLAUDE_CLI_RETRIES", DEFAULT_CLI_RETRIES),
             },
             grok: CliRuntimeConfig {
                 executable: env_or("GROK_CLI_BIN", "grok"),
                 args: env_args("GROK_CLI_ARGS"),
                 timeout_seconds: env_u64("GROK_CLI_TIMEOUT", 600),
+                retries: env_u32("GROK_CLI_RETRIES", DEFAULT_CLI_RETRIES),
             },
         }
     }
@@ -382,9 +391,39 @@ impl Pipeline {
                         format!("Summarizing page {page_number} of {total_pages}."),
                     ),
                 );
-                let result = summarizer
-                    .summarize_page(page, summarization_options)
-                    .await?;
+                let result = match summarizer.summarize_page(page, summarization_options).await {
+                    Ok(result) => result,
+                    // Degrade-and-continue: one page's summarizer failure must
+                    // not discard the summaries already produced for the rest
+                    // of the document.
+                    Err(err) => {
+                        tracing::warn!(
+                            target: "summarizer_pipeline",
+                            job_id,
+                            stage = "summarization",
+                            page_number,
+                            total_pages,
+                            chunk_id = %page.chunk_id,
+                            duration_ms = page_started.elapsed().as_millis() as u64,
+                            error = %err,
+                            "Page summarization failed after retries; continuing without a summary"
+                        );
+                        summarized_pages.push(page.clone());
+                        emit_progress(
+                            progress.as_ref(),
+                            progress_payload(
+                                &stages,
+                                PipelineProgressStage::Summarization,
+                                Some(page_number),
+                                Some(total_pages),
+                                index + 1,
+                                total_pages.max(1),
+                                format!("Summarized page {page_number} of {total_pages}."),
+                            ),
+                        );
+                        continue;
+                    }
+                };
                 let budget_exhausted = result.budget_exhausted.map(summary_budget_reason);
                 tracing::info!(
                     target: "summarizer_pipeline",
@@ -699,55 +738,98 @@ async fn run_vision_stage(
             true
         } else {
             let classification_started = Instant::now();
-            let classification = classifier_provider
+            match classifier_provider
                 .as_ref()
                 .expect("classifier provider is available when classification is enabled")
                 .classify(&vision_page)
-                .await?;
-            tracing::info!(
-                target: "summarizer_pipeline",
-                job_id,
-                stage = "vision",
-                page_number,
-                total_pages,
-                chunk_id = %page.chunk_id,
-                classifier_provider = ?classifier_provider_name,
-                duration_ms = classification_started.elapsed().as_millis() as u64,
-                has_graphics = classification.has_graphics,
-                "Page classified"
-            );
-            classified_count += 1;
-            page.image_classifier = Some(classification.has_graphics);
-            classification.has_graphics
+                .await
+            {
+                Ok(classification) => {
+                    tracing::info!(
+                        target: "summarizer_pipeline",
+                        job_id,
+                        stage = "vision",
+                        page_number,
+                        total_pages,
+                        chunk_id = %page.chunk_id,
+                        classifier_provider = ?classifier_provider_name,
+                        duration_ms = classification_started.elapsed().as_millis() as u64,
+                        has_graphics = classification.has_graphics,
+                        "Page classified"
+                    );
+                    classified_count += 1;
+                    page.image_classifier = Some(classification.has_graphics);
+                    classification.has_graphics
+                }
+                // Degrade-and-continue: a classifier failure must not abort the
+                // whole job. Fall back to extracting the page (matching the
+                // skip-classification default) rather than dropping it.
+                Err(err) => {
+                    tracing::warn!(
+                        target: "summarizer_pipeline",
+                        job_id,
+                        stage = "vision",
+                        page_number,
+                        total_pages,
+                        chunk_id = %page.chunk_id,
+                        classifier_provider = ?classifier_provider_name,
+                        duration_ms = classification_started.elapsed().as_millis() as u64,
+                        error = %err,
+                        "Page classification failed after retries; extracting without classification"
+                    );
+                    page.image_classifier = None;
+                    true
+                }
+            }
         };
 
         if should_extract {
             let extraction_started = Instant::now();
-            let extraction = extractor_provider.extract(&vision_page).await?;
-            page.image_text = extraction.image_text;
-            tracing::info!(
-                target: "summarizer_pipeline",
-                job_id,
-                stage = "vision",
-                page_number,
-                total_pages,
-                chunk_id = %page.chunk_id,
-                extractor_provider = %extractor_provider_name,
-                duration_ms = extraction_started.elapsed().as_millis() as u64,
-                image_text_chars = optional_text_chars(page.image_text.as_deref()),
-                "Vision page extraction completed"
-            );
-            tracing::info!(
-                target: "summarizer_pipeline",
-                job_id,
-                stage = "vision",
-                page_number,
-                total_pages,
-                chunk_id = %page.chunk_id,
-                image_text_chars = optional_text_chars(page.image_text.as_deref()),
-                "Page vision extraction completed"
-            );
-            extracted_count += 1;
+            match extractor_provider.extract(&vision_page).await {
+                Ok(extraction) => {
+                    page.image_text = extraction.image_text;
+                    tracing::info!(
+                        target: "summarizer_pipeline",
+                        job_id,
+                        stage = "vision",
+                        page_number,
+                        total_pages,
+                        chunk_id = %page.chunk_id,
+                        extractor_provider = %extractor_provider_name,
+                        duration_ms = extraction_started.elapsed().as_millis() as u64,
+                        image_text_chars = optional_text_chars(page.image_text.as_deref()),
+                        "Vision page extraction completed"
+                    );
+                    tracing::info!(
+                        target: "summarizer_pipeline",
+                        job_id,
+                        stage = "vision",
+                        page_number,
+                        total_pages,
+                        chunk_id = %page.chunk_id,
+                        image_text_chars = optional_text_chars(page.image_text.as_deref()),
+                        "Page vision extraction completed"
+                    );
+                    extracted_count += 1;
+                }
+                // Degrade-and-continue: keep the page with no vision text rather
+                // than failing the entire job on one stubborn page.
+                Err(err) => {
+                    page.image_text = None;
+                    tracing::warn!(
+                        target: "summarizer_pipeline",
+                        job_id,
+                        stage = "vision",
+                        page_number,
+                        total_pages,
+                        chunk_id = %page.chunk_id,
+                        extractor_provider = %extractor_provider_name,
+                        duration_ms = extraction_started.elapsed().as_millis() as u64,
+                        error = %err,
+                        "Vision page extraction failed after retries; continuing with no image text"
+                    );
+                }
+            }
         } else {
             tracing::info!(
                 target: "summarizer_pipeline",
@@ -877,17 +959,20 @@ fn build_vision_provider(
         VisionMode::Codex => Ok(Box::new(
             CliVisionProvider::codex(provider_config.codex.executable.clone())
                 .with_args(provider_config.codex.args.clone())
-                .with_timeout_seconds(provider_config.codex.timeout_seconds),
+                .with_timeout_seconds(provider_config.codex.timeout_seconds)
+                .with_retries(provider_config.codex.retries),
         )),
         VisionMode::Claude => Ok(Box::new(
             CliVisionProvider::new(provider_config.claude.executable.clone())
                 .with_args(provider_config.claude.args.clone())
-                .with_timeout_seconds(provider_config.claude.timeout_seconds),
+                .with_timeout_seconds(provider_config.claude.timeout_seconds)
+                .with_retries(provider_config.claude.retries),
         )),
         VisionMode::Grok => Ok(Box::new(
             CliVisionProvider::grok(provider_config.grok.executable.clone())
                 .with_args(provider_config.grok.args.clone())
-                .with_timeout_seconds(provider_config.grok.timeout_seconds),
+                .with_timeout_seconds(provider_config.grok.timeout_seconds)
+                .with_retries(provider_config.grok.retries),
         )),
         VisionMode::Deepseek => Err(PipelineError::Vision(
             "deepseek vision mode is out of scope for the Rust backend".to_string(),
@@ -976,17 +1061,20 @@ fn build_summarizer(
         SummarizerProvider::Codex => Ok(Box::new(
             CliSummarizer::codex(provider_config.codex.executable.clone())
                 .with_args(provider_config.codex.args.clone())
-                .with_timeout_seconds(provider_config.codex.timeout_seconds),
+                .with_timeout_seconds(provider_config.codex.timeout_seconds)
+                .with_retries(provider_config.codex.retries),
         )),
         SummarizerProvider::Claude => Ok(Box::new(
             CliSummarizer::new(provider_config.claude.executable.clone())
                 .with_args(provider_config.claude.args.clone())
-                .with_timeout_seconds(provider_config.claude.timeout_seconds),
+                .with_timeout_seconds(provider_config.claude.timeout_seconds)
+                .with_retries(provider_config.claude.retries),
         )),
         SummarizerProvider::Grok => Ok(Box::new(
             CliSummarizer::grok(provider_config.grok.executable.clone())
                 .with_args(provider_config.grok.args.clone())
-                .with_timeout_seconds(provider_config.grok.timeout_seconds),
+                .with_timeout_seconds(provider_config.grok.timeout_seconds)
+                .with_retries(provider_config.grok.retries),
         )),
     }
 }
@@ -1222,5 +1310,13 @@ fn env_u64(key: &str, default: u64) -> u64 {
     std::env::var(key)
         .ok()
         .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_u32(key: &str, default: u32) -> u32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .map(|value: u32| value.max(1))
         .unwrap_or(default)
 }

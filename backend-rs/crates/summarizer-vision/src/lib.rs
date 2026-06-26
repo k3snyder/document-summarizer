@@ -15,7 +15,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use summarizer_cli_util::{
     cli_command_context, configure_isolated_grok_command, create_isolated_grok_home,
-    parse_codex_jsonl, parse_grok_json, resolve_cli_executable, run_cli_command,
+    parse_codex_jsonl, parse_grok_json, resolve_cli_executable, run_cli_command_with_retry,
+    RetryPolicy,
 };
 use summarizer_types::PipelineError;
 use tokio::process::Command;
@@ -368,6 +369,7 @@ pub struct CliVisionProvider {
     executable: String,
     args: Vec<String>,
     timeout_seconds: u64,
+    retries: u32,
     kind: CliProviderKind,
 }
 
@@ -377,6 +379,7 @@ impl CliVisionProvider {
             executable: executable.into(),
             args: Vec::new(),
             timeout_seconds: 600,
+            retries: 3,
             kind: CliProviderKind::Generic,
         }
     }
@@ -386,6 +389,7 @@ impl CliVisionProvider {
             executable: executable.into(),
             args: Vec::new(),
             timeout_seconds: 600,
+            retries: 3,
             kind: CliProviderKind::Codex,
         }
     }
@@ -395,6 +399,7 @@ impl CliVisionProvider {
             executable: executable.into(),
             args: Vec::new(),
             timeout_seconds: 600,
+            retries: 3,
             kind: CliProviderKind::Grok,
         }
     }
@@ -407,6 +412,15 @@ impl CliVisionProvider {
     pub fn with_timeout_seconds(mut self, timeout_seconds: u64) -> Self {
         self.timeout_seconds = timeout_seconds;
         self
+    }
+
+    pub fn with_retries(mut self, retries: u32) -> Self {
+        self.retries = retries;
+        self
+    }
+
+    fn retry_policy(&self) -> RetryPolicy {
+        RetryPolicy::new(self.retries)
     }
 
     async fn execute(&self, prompt: &str, page: &VisionPage) -> Result<String, PipelineError> {
@@ -427,18 +441,23 @@ impl CliVisionProvider {
             "{prompt}\n\nPage: {}\nChunk: {}\nImage base64:\n{}",
             page.page_number, page.chunk_id, page.image_base64
         );
-        let mut command = Command::new(resolved_cli_executable_value(&self.executable));
-        command
-            .args(&self.args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let output = run_cli_command(
-            command,
+        let executable = resolved_cli_executable_value(&self.executable);
+        let make_command = || {
+            let mut command = Command::new(&executable);
+            command
+                .args(&self.args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command
+        };
+        let output = run_cli_command_with_retry(
+            make_command,
             &request,
             &context,
             self.timeout_seconds,
             "CLI vision provider",
+            self.retry_policy(),
         )
         .await
         .map_err(PipelineError::Vision)?;
@@ -497,19 +516,24 @@ impl CliVisionProvider {
             &args,
             self.timeout_seconds,
         );
-        let mut command = Command::new(resolved_cli_executable_value(&self.executable));
-        command
-            .args(&args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let executable = resolved_cli_executable_value(&self.executable);
+        let make_command = || {
+            let mut command = Command::new(&executable);
+            command
+                .args(&args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command
+        };
 
-        let output = run_cli_command(
-            command,
+        let output = run_cli_command_with_retry(
+            make_command,
             prompt,
             &context,
             self.timeout_seconds,
             "CLI vision provider",
+            self.retry_policy(),
         )
         .await
         .map_err(PipelineError::Vision)?;
@@ -580,20 +604,25 @@ impl CliVisionProvider {
             &args,
             self.timeout_seconds,
         );
-        let mut command = Command::new(resolved_cli_executable_value(&self.executable));
-        configure_isolated_grok_command(&mut command, &grok_home);
-        command
-            .args(&args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let executable = resolved_cli_executable_value(&self.executable);
+        let make_command = || {
+            let mut command = Command::new(&executable);
+            configure_isolated_grok_command(&mut command, &grok_home);
+            command
+                .args(&args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command
+        };
 
-        let output = run_cli_command(
-            command,
+        let output = run_cli_command_with_retry(
+            make_command,
             "",
             &context,
             self.timeout_seconds,
             "CLI vision provider",
+            self.retry_policy(),
         )
         .await
         .map_err(PipelineError::Vision)?;

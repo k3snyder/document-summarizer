@@ -6,7 +6,8 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 use summarizer_cli_util::{
     cli_command_context, configure_isolated_grok_command, create_isolated_grok_home,
-    parse_codex_jsonl, parse_grok_json, resolve_cli_executable, run_cli_command,
+    parse_codex_jsonl, parse_grok_json, resolve_cli_executable, run_cli_command_with_retry,
+    RetryPolicy,
 };
 use summarizer_types::{PageOutput, PipelineError, SummarizerMode};
 use tokio::process::Command;
@@ -701,6 +702,7 @@ pub struct CliSummarizer {
     executable: String,
     args: Vec<String>,
     timeout_seconds: u64,
+    retries: u32,
     kind: CliProviderKind,
 }
 
@@ -710,6 +712,7 @@ impl CliSummarizer {
             executable: executable.into(),
             args: Vec::new(),
             timeout_seconds: 600,
+            retries: 3,
             kind: CliProviderKind::Generic,
         }
     }
@@ -719,6 +722,7 @@ impl CliSummarizer {
             executable: executable.into(),
             args: Vec::new(),
             timeout_seconds: 600,
+            retries: 3,
             kind: CliProviderKind::Codex,
         }
     }
@@ -728,6 +732,7 @@ impl CliSummarizer {
             executable: executable.into(),
             args: Vec::new(),
             timeout_seconds: 600,
+            retries: 3,
             kind: CliProviderKind::Grok,
         }
     }
@@ -740,6 +745,15 @@ impl CliSummarizer {
     pub fn with_timeout_seconds(mut self, timeout_seconds: u64) -> Self {
         self.timeout_seconds = timeout_seconds;
         self
+    }
+
+    pub fn with_retries(mut self, retries: u32) -> Self {
+        self.retries = retries;
+        self
+    }
+
+    fn retry_policy(&self) -> RetryPolicy {
+        RetryPolicy::new(self.retries)
     }
 
     async fn execute_prompt(&self, prompt: &str) -> Result<String, PipelineError> {
@@ -756,18 +770,23 @@ impl CliSummarizer {
             &self.args,
             self.timeout_seconds,
         );
-        let mut command = Command::new(resolved_cli_executable_value(&self.executable));
-        command
-            .args(&self.args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let output = run_cli_command(
-            command,
+        let executable = resolved_cli_executable_value(&self.executable);
+        let make_command = || {
+            let mut command = Command::new(&executable);
+            command
+                .args(&self.args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command
+        };
+        let output = run_cli_command_with_retry(
+            make_command,
             prompt,
             &context,
             self.timeout_seconds,
             "CLI summarizer",
+            self.retry_policy(),
         )
         .await
         .map_err(PipelineError::Summarization)?;
@@ -796,19 +815,24 @@ impl CliSummarizer {
             &args,
             self.timeout_seconds,
         );
-        let mut command = Command::new(resolved_cli_executable_value(&self.executable));
-        command
-            .args(&args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let executable = resolved_cli_executable_value(&self.executable);
+        let make_command = || {
+            let mut command = Command::new(&executable);
+            command
+                .args(&args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command
+        };
 
-        let output = run_cli_command(
-            command,
+        let output = run_cli_command_with_retry(
+            make_command,
             prompt,
             &context,
             self.timeout_seconds,
             "CLI summarizer",
+            self.retry_policy(),
         )
         .await
         .map_err(PipelineError::Summarization)?;
@@ -852,20 +876,25 @@ impl CliSummarizer {
             &args,
             self.timeout_seconds,
         );
-        let mut command = Command::new(resolved_cli_executable_value(&self.executable));
-        configure_isolated_grok_command(&mut command, &grok_home);
-        command
-            .args(&args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let executable = resolved_cli_executable_value(&self.executable);
+        let make_command = || {
+            let mut command = Command::new(&executable);
+            configure_isolated_grok_command(&mut command, &grok_home);
+            command
+                .args(&args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command
+        };
 
-        let output = run_cli_command(
-            command,
+        let output = run_cli_command_with_retry(
+            make_command,
             "",
             &context,
             self.timeout_seconds,
             "CLI summarizer",
+            self.retry_policy(),
         )
         .await
         .map_err(PipelineError::Summarization)?;
