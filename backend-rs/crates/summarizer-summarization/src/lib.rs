@@ -25,6 +25,7 @@ enum CliProviderKind {
     Generic,
     Codex,
     Grok,
+    Copilot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -737,6 +738,16 @@ impl CliSummarizer {
         }
     }
 
+    pub fn copilot(executable: impl Into<String>) -> Self {
+        Self {
+            executable: executable.into(),
+            args: Vec::new(),
+            timeout_seconds: 600,
+            retries: 3,
+            kind: CliProviderKind::Copilot,
+        }
+    }
+
     pub fn with_args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.args = args.into_iter().map(Into::into).collect();
         self
@@ -762,6 +773,9 @@ impl CliSummarizer {
         }
         if self.kind == CliProviderKind::Grok {
             return self.execute_grok_prompt(prompt).await;
+        }
+        if self.kind == CliProviderKind::Copilot {
+            return self.execute_copilot_prompt(prompt).await;
         }
 
         let context = cli_command_context(
@@ -907,6 +921,52 @@ impl CliSummarizer {
             )));
         }
         Ok(clean_response_content(&content))
+    }
+
+    async fn execute_copilot_prompt(&self, prompt: &str) -> Result<String, PipelineError> {
+        let mut args = vec![
+            "-p".to_string(),
+            prompt.to_string(),
+            "--allow-all-tools".to_string(),
+            "--no-color".to_string(),
+            "-s".to_string(),
+        ];
+        args.extend(self.args.clone());
+        let context = cli_command_context(
+            "Copilot CLI summarizer",
+            &self.executable,
+            &args,
+            self.timeout_seconds,
+        );
+        let executable = resolved_cli_executable_value(&self.executable);
+        let make_command = || {
+            let mut command = Command::new(&executable);
+            command
+                .args(&args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command
+        };
+
+        let output = run_cli_command_with_retry(
+            make_command,
+            "",
+            &context,
+            self.timeout_seconds,
+            "CLI summarizer",
+            self.retry_policy(),
+        )
+        .await
+        .map_err(PipelineError::Summarization)?;
+        let content = clean_response_content(&output.stdout);
+        if content.trim().is_empty() {
+            return Err(PipelineError::Summarization(format!(
+                "Copilot CLI returned empty output; {context}; stderr={}",
+                output.stderr.trim()
+            )));
+        }
+        Ok(content)
     }
 
     async fn summarize_full(

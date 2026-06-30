@@ -1,8 +1,10 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle,
   CheckCircle2,
   CircleStop,
   Clock,
+  Download,
   FilePlus2,
   History,
   ScrollText,
@@ -20,15 +22,20 @@ import {
   DesktopJob,
   ProviderAvailability,
   ProviderAvailabilityRole,
+  UpdateInfo,
 } from "./types";
 
 export function Header({
   view,
   activeJob,
+  updateInfo,
+  onOpenUpdate,
   onCancel,
 }: {
   view: View;
   activeJob: DesktopJob | null;
+  updateInfo: UpdateInfo | null;
+  onOpenUpdate: () => void;
   onCancel: () => void;
 }) {
   const title =
@@ -67,15 +74,100 @@ export function Header({
           <p>{subtitle}</p>
         </div>
       </div>
-      {activeJob && (
+      {(updateInfo?.update_available || activeJob) && (
         <div className="topbar-actions">
-          <button className="button secondary" onClick={onCancel}>
-            <CircleStop size={16} />
-            Cancel
-          </button>
+          {updateInfo?.update_available && (
+            <button
+              type="button"
+              className="button primary compact update-pill"
+              onClick={onOpenUpdate}
+              aria-label={`Update available: version ${updateInfo.latest_version}`}
+              title={`Version ${updateInfo.latest_version} is available`}
+            >
+              <Download size={16} aria-hidden="true" />
+              Update
+            </button>
+          )}
+          {activeJob && (
+            <button className="button secondary" onClick={onCancel}>
+              <CircleStop size={16} />
+              Cancel
+            </button>
+          )}
         </div>
       )}
     </header>
+  );
+}
+
+export function UpdateDialog({
+  info,
+  onClose,
+  onSkip,
+}: {
+  info: UpdateInfo;
+  onClose: () => void;
+  onSkip: (version: string) => void;
+}) {
+  const titleId = React.useId();
+
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className="update-modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      onClick={onClose}
+    >
+      <div className="update-modal" onClick={(event) => event.stopPropagation()}>
+        <h3 id={titleId}>Update available</h3>
+        <p className="update-modal-summary">
+          You have <strong>{info.current_version}</strong>. Version{" "}
+          <strong>{info.latest_version}</strong> is available.
+        </p>
+        {info.release_notes && (
+          // Release notes are rendered as plain text (never HTML) to avoid XSS
+          // from the untrusted GitHub release body.
+          <pre className="update-release-notes">{info.release_notes}</pre>
+        )}
+        <div className="update-modal-actions">
+          <button
+            type="button"
+            className="button primary"
+            onClick={() => void openUrl(info.release_url)}
+          >
+            View release
+          </button>
+          {info.asset_url && (
+            <button
+              type="button"
+              className="button secondary"
+              onClick={() => void openUrl(info.asset_url as string)}
+            >
+              Download DMG
+            </button>
+          )}
+          <button type="button" className="button ghost" onClick={onClose}>
+            Later
+          </button>
+          <button
+            type="button"
+            className="button ghost"
+            onClick={() => onSkip(info.latest_version)}
+          >
+            Skip this version
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -392,7 +484,7 @@ export function SwitchRow({
   onChange,
 }: {
   label: string;
-  description: string;
+  description?: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
@@ -400,7 +492,7 @@ export function SwitchRow({
     <label className="switch-row">
       <span>
         <strong>{label}</strong>
-        <small>{description}</small>
+        {description && <small>{description}</small>}
       </span>
       <input
         type="checkbox"

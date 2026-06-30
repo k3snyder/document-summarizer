@@ -8,8 +8,9 @@ export type VisionMode =
   | "ollama"
   | "llama_cpp"
   | "codex"
-  | "claude";
-export type CliProvider = "codex" | "claude" | "grok";
+  | "claude"
+  | "copilot";
+export type CliProvider = "codex" | "claude" | "grok" | "copilot";
 export type SummarizerMode = "full" | "topics-only" | "skip";
 export type SummarizerProvider =
   | "ollama"
@@ -17,7 +18,8 @@ export type SummarizerProvider =
   | "openai"
   | "codex"
   | "claude"
-  | "grok";
+  | "grok"
+  | "copilot";
 export type ThemePreference = "system" | "light" | "dark";
 export type VisibleVisionProvider = Exclude<
   VisionMode,
@@ -41,6 +43,7 @@ export const RUST_VISION_MODE_SERDE_NAMES = [
   "codex",
   "claude",
   "grok",
+  "copilot",
 ] as const;
 export const RUST_SUMMARIZER_PROVIDER_SERDE_NAMES = [
   "ollama",
@@ -49,11 +52,13 @@ export const RUST_SUMMARIZER_PROVIDER_SERDE_NAMES = [
   "codex",
   "claude",
   "grok",
+  "copilot",
 ] as const;
 export const RUST_CLI_PROVIDER_SERDE_NAMES = [
   "codex",
   "claude",
   "grok",
+  "copilot",
 ] as const;
 
 type ExactUnion<
@@ -301,6 +306,12 @@ export interface ProviderSettings {
   codex: CliSettings;
   claude: CliSettings;
   grok: CliSettings;
+  copilot: CliSettings;
+}
+
+export interface UpdatePreferences {
+  enabled: boolean;
+  skipped_version: string | null;
 }
 
 export interface DesktopSettings {
@@ -311,6 +322,16 @@ export interface DesktopSettings {
   pipeline_defaults: PipelineConfig;
   provider_visibility: ProviderVisibilitySettings;
   logging: LoggingSettings;
+  updates: UpdatePreferences;
+}
+
+export interface UpdateInfo {
+  update_available: boolean;
+  current_version: string;
+  latest_version: string;
+  release_url: string;
+  release_notes: string | null;
+  asset_url: string | null;
 }
 
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error";

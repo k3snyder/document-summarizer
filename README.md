@@ -266,6 +266,22 @@ Supported provider settings:
 - OpenAI base URL, API key, text model, and vision model
 - Codex, Claude, and Grok executable path, args, timeout, and reasoning effort
 
+### Update Checks
+
+On launch the app makes a single, anonymous request to the GitHub Releases API
+(`api.github.com/repos/k3snyder/document-summarizer/releases/latest`) to see
+whether a newer version has been published. When one is available, an **Update**
+button appears in the top bar; clicking it shows the release notes and links to
+the [Releases page](https://github.com/k3snyder/document-summarizer/releases) so
+you can download the new build. "Skip this version" hides the button until a
+newer release ships.
+
+This is the only network call the app makes on its own. It sends no document
+content, prompts, or personal data — only an anonymous `GET` with a
+`document-summarizer/<version>` User-Agent. Turn it off any time under
+**Settings → Updates → "Check for updates on launch"** (on by default); the
+preference is stored in `settings.json` as `updates.enabled`.
+
 ## Usage Details
 
 Desktop app data is stored under `~/.summarizer` (macOS/Linux) and `%USERPROFILE%\.summarizer` (Windows):

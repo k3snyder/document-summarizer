@@ -7,11 +7,13 @@ import {
   ProviderVisibilityGroup,
   SelectField,
   SettingsToggle,
+  SwitchRow,
   TextField,
 } from "./app-common";
 import {
   DEFAULT_LOGGING_SETTINGS,
   DEFAULT_PROVIDER_VISIBILITY,
+  DEFAULT_UPDATE_SETTINGS,
   displaySettingsPath,
   enabledCount,
   errorMessage,
@@ -34,12 +36,14 @@ import {
 export function SettingsView({
   settings,
   settingsPath,
+  appVersion,
   onSettingsChange,
   onError,
   onNotice,
 }: {
   settings: DesktopSettings;
   settingsPath: string;
+  appVersion: string;
   onSettingsChange: (settings: DesktopSettings) => void;
   onError: (message: string | null) => void;
   onNotice: (message: string | null) => void;
@@ -94,6 +98,20 @@ export function SettingsView({
       pipeline_defaults: {
         ...DEFAULT_PIPELINE_CONFIG,
         ...(current.pipeline_defaults ?? {}),
+        [field]: value,
+      },
+    }));
+  }
+
+  function updateUpdates<K extends keyof DesktopSettings["updates"]>(
+    field: K,
+    value: DesktopSettings["updates"][K],
+  ) {
+    setDraft((current) => ({
+      ...current,
+      updates: {
+        ...DEFAULT_UPDATE_SETTINGS,
+        ...(current.updates ?? {}),
         [field]: value,
       },
     }));
@@ -188,6 +206,25 @@ export function SettingsView({
           options={["light", "system", "dark"]}
           onChange={(value) => updateTheme(value as ThemePreference)}
         />
+      </div>
+
+      <div className="settings-section">
+        <div className="section-heading">
+          <div>
+            <h4>Updates</h4>
+          </div>
+        </div>
+        <SwitchRow
+          label="Check for updates on launch"
+          checked={(draft.updates ?? DEFAULT_UPDATE_SETTINGS).enabled}
+          onChange={(checked) => updateUpdates("enabled", checked)}
+        />
+        <div className="settings-version-row">
+          <strong>Current version</strong>
+          <span className="version-pill" title="Installed app version">
+            v{appVersion || "—"}
+          </span>
+        </div>
       </div>
 
       <div className="settings-section logging-settings-section">
@@ -508,6 +545,25 @@ export function SettingsView({
           min={1}
           step={30}
           onChange={(value) => updateProvider("grok", "timeout_seconds", value)}
+        />
+        <TextField
+          label="Copilot executable"
+          value={draft.providers.copilot.executable}
+          onChange={(value) => updateProvider("copilot", "executable", value)}
+        />
+        <TextField
+          label="Copilot args"
+          value={draft.providers.copilot.args}
+          onChange={(value) => updateProvider("copilot", "args", value)}
+        />
+        <NumberField
+          label="Copilot timeout seconds"
+          value={draft.providers.copilot.timeout_seconds}
+          min={1}
+          step={30}
+          onChange={(value) =>
+            updateProvider("copilot", "timeout_seconds", value)
+          }
         />
       </ProviderBlock>
     </section>

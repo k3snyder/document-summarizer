@@ -9,6 +9,39 @@ and the backend crate manifests on the same version.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-30
+
+### Added
+
+- Added a GitHub Copilot CLI provider (`copilot`) for both vision and
+  summarization, alongside `codex`, `claude`, and `grok`, with its own
+  executable/args/timeout settings and provider-visibility toggles.
+- Added an on-launch update check that queries the GitHub Releases API and shows
+  an `Update` button in the top bar when a newer version is published. The dialog
+  surfaces release notes with `View release`, `Download DMG`, `Later`, and
+  `Skip this version` actions (Tauri commands `check_for_update`,
+  `skip_update_version`, and `app_version`).
+- Added a `Settings → Updates` section with a `Check for updates on launch`
+  toggle (on by default) and a current-version display, persisted as
+  `updates.enabled` and `updates.skipped_version` in `settings.json`.
+- Added the Tauri `opener` capability (`opener:default`, `opener:allow-open-url`)
+  so the update dialog can open release and download URLs in the browser.
+- Documented the update-check behavior, opt-out, and its network/privacy
+  footprint in the README.
+
+### Changed
+
+- Changed the default Ollama summarizer model from `llama3.2` to
+  `gemma4:12b-it-qat` (the vision model stays `llava`).
+
+### Fixed
+
+- Fixed `--config-json` to merge a partial override onto the desktop default
+  pipeline config instead of resetting omitted fields, so flipping one toggle no
+  longer silently disables vision; non-object `--config-json` payloads are now
+  rejected.
+- Stopped showing the file-upload prompt while a job is actively processing.
+
 ## [0.2.0] - 2026-06-25
 
 ### Added
@@ -84,6 +117,7 @@ and the backend crate manifests on the same version.
   logs under `~/.summarizer`.
 - Headless Axum server and HTTP CLI for local workflow automation.
 
-[Unreleased]: https://github.com/k3snyder/document-summarizer/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/k3snyder/document-summarizer/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/k3snyder/document-summarizer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/k3snyder/document-summarizer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/k3snyder/document-summarizer/releases/tag/v0.1.0

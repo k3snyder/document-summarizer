@@ -75,6 +75,7 @@ pub enum VisionMode {
     Codex,
     Claude,
     Grok,
+    Copilot,
 }
 
 impl Default for VisionMode {
@@ -106,6 +107,7 @@ pub enum SummarizerProvider {
     Codex,
     Claude,
     Grok,
+    Copilot,
 }
 
 impl Default for SummarizerProvider {
@@ -120,6 +122,7 @@ pub enum CliProvider {
     Codex,
     Claude,
     Grok,
+    Copilot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

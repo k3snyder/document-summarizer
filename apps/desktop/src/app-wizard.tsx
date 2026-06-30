@@ -751,7 +751,10 @@ function resolveReviewVisionMode(
 ): VisionMode {
   if (
     cliProvider &&
-    (mode === "codex" || mode === "claude" || mode === "grok")
+    (mode === "codex" ||
+      mode === "claude" ||
+      mode === "grok" ||
+      mode === "copilot")
   ) {
     return cliProvider;
   }

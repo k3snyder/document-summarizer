@@ -265,9 +265,9 @@ impl Default for OllamaSettings {
         Self {
             openai_base_url: "http://localhost:11434/v1".to_string(),
             api_key: String::new(),
-            model: "llama3.2".to_string(),
-            model_2: "llama3.2".to_string(),
-            model_3: "llama3.2".to_string(),
+            model: "gemma4:12b-it-qat".to_string(),
+            model_2: "gemma4:12b-it-qat".to_string(),
+            model_3: "gemma4:12b-it-qat".to_string(),
             vision_model: "llava".to_string(),
         }
     }
@@ -308,6 +308,8 @@ struct ProviderSettings {
     claude: CliSettings,
     #[serde(default = "default_grok_settings")]
     grok: CliSettings,
+    #[serde(default = "default_copilot_settings")]
+    copilot: CliSettings,
 }
 
 impl Default for ProviderSettings {
@@ -319,6 +321,7 @@ impl Default for ProviderSettings {
             codex: default_codex_settings(),
             claude: default_claude_settings(),
             grok: default_grok_settings(),
+            copilot: default_copilot_settings(),
         }
     }
 }
@@ -335,6 +338,10 @@ fn default_grok_settings() -> CliSettings {
     CliSettings::new("grok")
 }
 
+fn default_copilot_settings() -> CliSettings {
+    CliSettings::new("copilot")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct VisionProviderVisibilitySettings {
     llama_cpp: bool,
@@ -346,6 +353,8 @@ struct VisionProviderVisibilitySettings {
     claude: bool,
     #[serde(default)]
     grok: bool,
+    #[serde(default)]
+    copilot: bool,
 }
 
 impl Default for VisionProviderVisibilitySettings {
@@ -357,6 +366,7 @@ impl Default for VisionProviderVisibilitySettings {
             codex: true,
             claude: false,
             grok: false,
+            copilot: false,
         }
     }
 }
@@ -372,6 +382,8 @@ struct SummarizerProviderVisibilitySettings {
     claude: bool,
     #[serde(default)]
     grok: bool,
+    #[serde(default)]
+    copilot: bool,
 }
 
 impl Default for SummarizerProviderVisibilitySettings {
@@ -383,6 +395,7 @@ impl Default for SummarizerProviderVisibilitySettings {
             codex: true,
             claude: false,
             grok: false,
+            copilot: false,
         }
     }
 }
@@ -454,6 +467,33 @@ fn default_redact_log_secrets() -> bool {
     true
 }
 
+/// User preferences for the GitHub release update check. Persisted in
+/// `settings.json`; tolerant of legacy files that predate the field via
+/// `#[serde(default)]` on `DesktopSettings::updates`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UpdatePreferences {
+    /// Whether the app checks GitHub for a newer release on launch.
+    #[serde(default = "default_update_check_enabled")]
+    enabled: bool,
+    /// A release the user asked to skip; the Update indicator stays hidden
+    /// until a strictly newer version ships.
+    #[serde(default)]
+    skipped_version: Option<String>,
+}
+
+impl Default for UpdatePreferences {
+    fn default() -> Self {
+        Self {
+            enabled: default_update_check_enabled(),
+            skipped_version: None,
+        }
+    }
+}
+
+fn default_update_check_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DesktopSettings {
     appearance: AppearanceSettings,
@@ -464,6 +504,8 @@ struct DesktopSettings {
     provider_visibility: ProviderVisibilitySettings,
     #[serde(default)]
     logging: LoggingSettings,
+    #[serde(default)]
+    updates: UpdatePreferences,
 }
 
 impl Default for DesktopSettings {
@@ -474,6 +516,7 @@ impl Default for DesktopSettings {
             pipeline_defaults: desktop_default_pipeline_config(),
             provider_visibility: ProviderVisibilitySettings::default(),
             logging: LoggingSettings::default(),
+            updates: UpdatePreferences::default(),
         }
     }
 }
@@ -535,6 +578,7 @@ enum RequiredProvider {
     Codex,
     Claude,
     Grok,
+    Copilot,
 }
 
 #[tauri::command]
@@ -658,11 +702,36 @@ fn parse_cli_enqueue(args: &[String]) -> AppResult<Option<CliEnqueueRequest>> {
     }
 
     let config = match config_json {
-        Some(raw) => serde_json::from_str(&raw)
-            .map_err(|err| AppError::new("cli", format!("Invalid --config-json: {err}")))?,
+        Some(raw) => merge_config_json_onto_desktop_default(&raw)?,
         None => desktop_default_pipeline_config(),
     };
     Ok(Some(CliEnqueueRequest { files, config }))
+}
+
+/// Apply a `--config-json` override on top of the desktop default pipeline
+/// config.
+///
+/// The override is a (possibly partial) JSON object: only the keys it contains
+/// change, and every field it omits keeps its desktop default (e.g. Step 2
+/// Vision stays on Codex). Deserializing the override standalone would instead
+/// reset omitted fields to `PipelineConfig::default()` — notably
+/// `vision_mode = None` — which silently disables vision whenever a caller
+/// flips a single unrelated toggle like `vision_skip_classification`.
+fn merge_config_json_onto_desktop_default(raw: &str) -> AppResult<PipelineConfig> {
+    let overrides: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|err| AppError::new("cli", format!("Invalid --config-json: {err}")))?;
+    let serde_json::Value::Object(overrides) = overrides else {
+        return Err(AppError::new("cli", "--config-json must be a JSON object."));
+    };
+    let mut merged = serde_json::to_value(desktop_default_pipeline_config())
+        .map_err(|err| AppError::new("cli", format!("Could not encode default config: {err}")))?;
+    if let Some(base) = merged.as_object_mut() {
+        for (key, value) in overrides {
+            base.insert(key, value);
+        }
+    }
+    serde_json::from_value(merged)
+        .map_err(|err| AppError::new("cli", format!("Invalid --config-json: {err}")))
 }
 
 /// Bring the main window to the foreground. Used when a CLI request is forwarded
@@ -860,6 +929,216 @@ async fn provider_readiness(
 #[tauri::command]
 async fn provider_availability(settings: DesktopSettings) -> AppResult<Vec<ProviderAvailability>> {
     Ok(check_visible_provider_availability(&settings).await)
+}
+
+/// The running app version (`Cargo.toml` `[package].version`). Surfaced in
+/// Settings and used as the comparison base in `check_for_update`, so the
+/// version users see is exactly the one the update check compares against.
+#[tauri::command]
+fn app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// Public GitHub repository whose Releases page drives the in-app update check.
+const GITHUB_LATEST_RELEASE_URL: &str =
+    "https://api.github.com/repos/k3snyder/document-summarizer/releases/latest";
+
+/// Result of an update check, surfaced to the frontend Update indicator.
+/// Field names are the JSON contract consumed by the `UpdateInfo` TS interface.
+#[derive(Debug, Clone, Default, Serialize)]
+struct UpdateInfo {
+    update_available: bool,
+    current_version: String,
+    latest_version: String,
+    release_url: String,
+    release_notes: Option<String>,
+    asset_url: Option<String>,
+}
+
+/// Subset of the GitHub Releases API payload we read. Parsing is tolerant
+/// (`#[serde(default)]`) so response-shape changes never break the check.
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    #[serde(default)]
+    tag_name: String,
+    #[serde(default)]
+    html_url: String,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
+    assets: Vec<GithubAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubAsset {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    browser_download_url: String,
+}
+
+/// Check the public GitHub repo for a newer published release.
+///
+/// Called once per launch from the frontend. Deliberately *fail-silent*: any
+/// network/parse error, opt-out, or malformed tag returns
+/// `update_available = false` and never surfaces an error to the user. The
+/// once-per-launch contract keeps us well under GitHub's unauthenticated
+/// 60 req/hr/IP limit, so no token or persistent ETag cache is needed.
+#[tauri::command]
+async fn check_for_update(state: State<'_, DesktopState>) -> AppResult<UpdateInfo> {
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let base = UpdateInfo {
+        current_version: current.clone(),
+        ..Default::default()
+    };
+
+    // Respect the user's opt-out and remember any skipped version.
+    let (enabled, skipped_version) = {
+        let settings = current_settings_from_desktop(state.inner())?;
+        (
+            settings.updates.enabled,
+            settings.updates.skipped_version.clone(),
+        )
+    };
+    if !enabled {
+        return Ok(base);
+    }
+
+    // GitHub requires a User-Agent; a missing/blank one returns 403.
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .user_agent(format!("document-summarizer/{current}"))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            tracing::debug!(
+                target: "summarizer_desktop::update",
+                error = %err,
+                "Could not build update-check HTTP client"
+            );
+            return Ok(base);
+        }
+    };
+
+    let response = match client
+        .get(GITHUB_LATEST_RELEASE_URL)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            // Offline / DNS / TLS / timeout: stay quiet.
+            tracing::debug!(
+                target: "summarizer_desktop::update",
+                error = %err,
+                "Update check request failed"
+            );
+            return Ok(base);
+        }
+    };
+
+    // 404 (no releases yet) and any other non-2xx land here, not in the `Err`
+    // arm above — branch on the status explicitly and treat as "no update".
+    if !response.status().is_success() {
+        tracing::debug!(
+            target: "summarizer_desktop::update",
+            status = %response.status(),
+            "Update check returned a non-success status"
+        );
+        return Ok(base);
+    }
+
+    let release: GithubRelease = match response.json().await {
+        Ok(release) => release,
+        Err(err) => {
+            tracing::debug!(
+                target: "summarizer_desktop::update",
+                error = %err,
+                "Could not parse update-check payload"
+            );
+            return Ok(base);
+        }
+    };
+
+    let (latest_version, update_available) = evaluate_release(
+        &current,
+        &release.tag_name,
+        release.draft,
+        release.prerelease,
+        skipped_version.as_deref(),
+    );
+
+    let asset_url = release
+        .assets
+        .into_iter()
+        .find(|asset| asset.name.to_ascii_lowercase().ends_with(".dmg"))
+        .map(|asset| asset.browser_download_url);
+
+    Ok(UpdateInfo {
+        update_available,
+        current_version: current,
+        latest_version,
+        release_url: release.html_url,
+        release_notes: release.body,
+        asset_url,
+    })
+}
+
+/// Pure decision logic for the update check, split out so it can be tested
+/// without network IO. Returns the normalized latest version (the tag with any
+/// leading `v` stripped) and whether it should prompt an update.
+///
+/// Drafts/prereleases never prompt (`/releases/latest` already excludes them,
+/// but we guard anyway). A non-semver tag or unparseable local version never
+/// prompts. A version equal to `skipped_version` is suppressed until something
+/// strictly newer ships.
+fn evaluate_release(
+    current: &str,
+    tag_name: &str,
+    draft: bool,
+    prerelease: bool,
+    skipped_version: Option<&str>,
+) -> (String, bool) {
+    let latest = tag_name.trim_start_matches(['v', 'V']).to_string();
+    if draft || prerelease {
+        return (latest, false);
+    }
+    let newer = matches!(
+        (
+            semver::Version::parse(&latest),
+            semver::Version::parse(current),
+        ),
+        (Ok(latest_v), Ok(local_v)) if latest_v > local_v
+    );
+    let available = newer && skipped_version != Some(latest.as_str());
+    (latest, available)
+}
+
+/// Persist the user's choice to skip a specific release version. Returns the
+/// updated settings so the frontend can keep its in-memory copy in sync (and
+/// avoid clobbering the field on the next Settings save).
+#[tauri::command]
+fn skip_update_version(
+    state: State<'_, DesktopState>,
+    version: String,
+) -> AppResult<DesktopSettings> {
+    let updated = {
+        let mut guard = state
+            .settings
+            .write()
+            .map_err(|_| AppError::new("settings", "Settings lock is poisoned"))?;
+        guard.updates.skipped_version = Some(version);
+        guard.clone()
+    };
+    write_settings_file(&updated)?;
+    Ok(updated)
 }
 
 fn normalize_enqueue_paths(file_paths: Vec<String>) -> AppResult<Vec<PathBuf>> {
@@ -1418,7 +1697,7 @@ fn pipeline_provider_config(settings: &DesktopSettings) -> PipelineProviderConfi
     let providers = &settings.providers;
     let openai_model = setting_or(&providers.openai.model, "gpt-4.1-mini");
     let llama_model = setting_or(&providers.llama_cpp.model, "model.gguf");
-    let ollama_model = setting_or(&providers.ollama.model, "llama3.2");
+    let ollama_model = setting_or(&providers.ollama.model, "gemma4:12b-it-qat");
 
     PipelineProviderConfig {
         openai: HttpProviderConfig {
@@ -1463,6 +1742,7 @@ fn pipeline_provider_config(settings: &DesktopSettings) -> PipelineProviderConfi
         codex: cli_runtime_config(&providers.codex, codex_cli_args),
         claude: cli_runtime_config(&providers.claude, claude_cli_args),
         grok: cli_runtime_config(&providers.grok, grok_cli_args),
+        copilot: cli_runtime_config(&providers.copilot, copilot_cli_args),
     }
 }
 
@@ -1531,6 +1811,14 @@ fn grok_cli_args(settings: &CliSettings) -> String {
     )
 }
 
+fn copilot_cli_args(settings: &CliSettings) -> String {
+    // The Copilot provider bakes the required programmatic flags (`-p`,
+    // `--allow-all-tools`, `--no-color`, `-s`) into the vision/summarization
+    // crates, so the desktop layer only forwards the user's custom args (for
+    // example `--model claude-sonnet-4.5`).
+    append_cli_args(Vec::new(), &settings.args)
+}
+
 fn append_cli_args(mut args: Vec<String>, custom_args: &str) -> String {
     args.extend(
         custom_args
@@ -1582,6 +1870,9 @@ async fn check_visible_provider_availability(
     if visibility.vision.grok || visibility.classifier.grok {
         push_availability_check(&mut checks, "vision", RequiredProvider::Grok);
     }
+    if visibility.vision.copilot || visibility.classifier.copilot {
+        push_availability_check(&mut checks, "vision", RequiredProvider::Copilot);
+    }
 
     if visibility.summarizer.llama_cpp {
         push_availability_check(&mut checks, "summarizer", RequiredProvider::LlamaCpp);
@@ -1600,6 +1891,9 @@ async fn check_visible_provider_availability(
     }
     if visibility.summarizer.grok {
         push_availability_check(&mut checks, "summarizer", RequiredProvider::Grok);
+    }
+    if visibility.summarizer.copilot {
+        push_availability_check(&mut checks, "summarizer", RequiredProvider::Copilot);
     }
 
     let client = reqwest::Client::builder()
@@ -1787,6 +2081,7 @@ fn push_vision_provider(
         VisionMode::Codex => RequiredProvider::Codex,
         VisionMode::Claude => RequiredProvider::Claude,
         VisionMode::Grok => RequiredProvider::Grok,
+        VisionMode::Copilot => RequiredProvider::Copilot,
     };
     push_provider(providers, provider);
     Ok(())
@@ -1803,15 +2098,22 @@ fn resolve_cli_vision_mode_for_readiness(
     cli_provider: Option<CliProvider>,
 ) -> VisionMode {
     match (mode, cli_provider) {
-        (VisionMode::Codex | VisionMode::Claude | VisionMode::Grok, Some(CliProvider::Codex)) => {
-            VisionMode::Codex
-        }
-        (VisionMode::Codex | VisionMode::Claude | VisionMode::Grok, Some(CliProvider::Claude)) => {
-            VisionMode::Claude
-        }
-        (VisionMode::Codex | VisionMode::Claude | VisionMode::Grok, Some(CliProvider::Grok)) => {
-            VisionMode::Grok
-        }
+        (
+            VisionMode::Codex | VisionMode::Claude | VisionMode::Grok | VisionMode::Copilot,
+            Some(CliProvider::Codex),
+        ) => VisionMode::Codex,
+        (
+            VisionMode::Codex | VisionMode::Claude | VisionMode::Grok | VisionMode::Copilot,
+            Some(CliProvider::Claude),
+        ) => VisionMode::Claude,
+        (
+            VisionMode::Codex | VisionMode::Claude | VisionMode::Grok | VisionMode::Copilot,
+            Some(CliProvider::Grok),
+        ) => VisionMode::Grok,
+        (
+            VisionMode::Codex | VisionMode::Claude | VisionMode::Grok | VisionMode::Copilot,
+            Some(CliProvider::Copilot),
+        ) => VisionMode::Copilot,
         _ => mode,
     }
 }
@@ -1819,17 +2121,33 @@ fn resolve_cli_vision_mode_for_readiness(
 fn resolve_summarizer_provider_for_readiness(config: &PipelineConfig) -> SummarizerProvider {
     match (config.summarizer_provider, config.summarizer_cli_provider) {
         (
-            SummarizerProvider::Codex | SummarizerProvider::Claude | SummarizerProvider::Grok,
+            SummarizerProvider::Codex
+            | SummarizerProvider::Claude
+            | SummarizerProvider::Grok
+            | SummarizerProvider::Copilot,
             Some(CliProvider::Codex),
         ) => SummarizerProvider::Codex,
         (
-            SummarizerProvider::Codex | SummarizerProvider::Claude | SummarizerProvider::Grok,
+            SummarizerProvider::Codex
+            | SummarizerProvider::Claude
+            | SummarizerProvider::Grok
+            | SummarizerProvider::Copilot,
             Some(CliProvider::Claude),
         ) => SummarizerProvider::Claude,
         (
-            SummarizerProvider::Codex | SummarizerProvider::Claude | SummarizerProvider::Grok,
+            SummarizerProvider::Codex
+            | SummarizerProvider::Claude
+            | SummarizerProvider::Grok
+            | SummarizerProvider::Copilot,
             Some(CliProvider::Grok),
         ) => SummarizerProvider::Grok,
+        (
+            SummarizerProvider::Codex
+            | SummarizerProvider::Claude
+            | SummarizerProvider::Grok
+            | SummarizerProvider::Copilot,
+            Some(CliProvider::Copilot),
+        ) => SummarizerProvider::Copilot,
         _ => config.summarizer_provider,
     }
 }
@@ -1842,6 +2160,7 @@ fn summarizer_required_provider(provider: SummarizerProvider) -> RequiredProvide
         SummarizerProvider::Codex => RequiredProvider::Codex,
         SummarizerProvider::Claude => RequiredProvider::Claude,
         SummarizerProvider::Grok => RequiredProvider::Grok,
+        SummarizerProvider::Copilot => RequiredProvider::Copilot,
     }
 }
 
@@ -1887,6 +2206,9 @@ async fn check_required_provider(
         }
         RequiredProvider::Grok => {
             check_cli_provider(provider.label(), &settings.providers.grok.executable)
+        }
+        RequiredProvider::Copilot => {
+            check_cli_provider(provider.label(), &settings.providers.copilot.executable)
         }
     }
 }
@@ -2050,6 +2372,7 @@ impl RequiredProvider {
             RequiredProvider::Codex => "codex",
             RequiredProvider::Claude => "claude",
             RequiredProvider::Grok => "grok",
+            RequiredProvider::Copilot => "copilot",
         }
     }
 
@@ -2061,6 +2384,7 @@ impl RequiredProvider {
             RequiredProvider::Codex => "Codex CLI",
             RequiredProvider::Claude => "Claude CLI",
             RequiredProvider::Grok => "Grok CLI",
+            RequiredProvider::Copilot => "Copilot CLI",
         }
     }
 }
@@ -2374,6 +2698,7 @@ pub fn run() {
             dispatch_cli_enqueue(app, &argv);
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(DesktopState::new(settings, load_history_from_disk()))
         .manage(log_state)
         .setup(|app| {
@@ -2416,6 +2741,9 @@ pub fn run() {
             settings_file_path,
             provider_readiness,
             provider_availability,
+            app_version,
+            check_for_update,
+            skip_update_version,
             logs::logs_get_paths,
             logs::logs_list_files,
             logs::logs_read_file,
@@ -2436,10 +2764,10 @@ pub fn run() {
 mod tests {
     use super::{
         build_queued_jobs, cancel_job_in_store, claim_next_queued_in_store, claude_cli_args,
-        codex_cli_args, command_available, desktop_default_pipeline_config, grok_cli_args,
-        job_output_dir, next_queued_job_index, parse_cli_enqueue, provider_health_url,
-        required_providers, validate_queue_runtime_requirements_with_renderer, CliSettings,
-        DesktopJobStatus, DesktopSettings, JobCancelEvent, JobStore, RequiredProvider,
+        codex_cli_args, command_available, desktop_default_pipeline_config, evaluate_release,
+        grok_cli_args, job_output_dir, next_queued_job_index, parse_cli_enqueue,
+        provider_health_url, required_providers, validate_queue_runtime_requirements_with_renderer,
+        CliSettings, DesktopJobStatus, DesktopSettings, JobCancelEvent, JobStore, RequiredProvider,
     };
     #[cfg(unix)]
     use super::{
@@ -2460,6 +2788,38 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn evaluate_release_flags_newer_version_and_strips_v_prefix() {
+        let (latest, available) = evaluate_release("0.1.0", "v0.2.0", false, false, None);
+        assert_eq!(latest, "0.2.0");
+        assert!(available);
+    }
+
+    #[test]
+    fn evaluate_release_ignores_same_or_older_versions() {
+        assert!(!evaluate_release("0.2.0", "v0.2.0", false, false, None).1);
+        assert!(!evaluate_release("0.2.0", "0.1.0", false, false, None).1);
+    }
+
+    #[test]
+    fn evaluate_release_skips_drafts_and_prereleases() {
+        assert!(!evaluate_release("0.1.0", "v0.2.0", true, false, None).1);
+        assert!(!evaluate_release("0.1.0", "v0.2.0", false, true, None).1);
+    }
+
+    #[test]
+    fn evaluate_release_honors_skipped_version() {
+        // The exact skipped version is suppressed...
+        assert!(!evaluate_release("0.1.0", "v0.2.0", false, false, Some("0.2.0")).1);
+        // ...but a strictly newer release than the skipped one still prompts.
+        assert!(evaluate_release("0.1.0", "v0.3.0", false, false, Some("0.2.0")).1);
+    }
+
+    #[test]
+    fn evaluate_release_ignores_malformed_tags() {
+        assert!(!evaluate_release("0.1.0", "release-latest", false, false, None).1);
     }
 
     #[test]
@@ -2506,6 +2866,35 @@ mod tests {
             parsed.config.summarizer_provider,
             SummarizerProvider::LlamaCpp
         );
+    }
+
+    #[test]
+    fn config_json_override_merges_onto_desktop_default() {
+        // A partial --config-json flips one advanced toggle but must keep the
+        // desktop defaults (Step 2 Vision = Codex, summarizer = Codex) for every
+        // field it does not mention — not reset them to PipelineConfig::default().
+        let parsed = parse_cli_enqueue(&args(&[
+            "--enqueue",
+            "/tmp/a.pdf",
+            "--config-json",
+            "{\"vision_skip_classification\":true}",
+        ]))
+        .unwrap()
+        .expect("expected an enqueue request");
+        assert!(parsed.config.vision_skip_classification);
+        assert_eq!(parsed.config.vision_mode, VisionMode::Codex);
+        assert_eq!(parsed.config.summarizer_provider, SummarizerProvider::Codex);
+    }
+
+    #[test]
+    fn config_json_override_rejects_non_object() {
+        assert!(parse_cli_enqueue(&args(&[
+            "--enqueue",
+            "/tmp/a.pdf",
+            "--config-json",
+            "[1,2,3]"
+        ]))
+        .is_err());
     }
 
     #[test]

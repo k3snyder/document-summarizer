@@ -113,13 +113,14 @@ pub struct PipelineProviderConfig {
     pub codex: CliRuntimeConfig,
     pub claude: CliRuntimeConfig,
     pub grok: CliRuntimeConfig,
+    pub copilot: CliRuntimeConfig,
 }
 
 impl PipelineProviderConfig {
     pub fn from_env() -> Self {
         let llama_model = env_or("LLAMA_CPP_MODEL", "model.gguf");
         let openai_model = env_or("OPENAI_MODEL", "gpt-4.1-mini");
-        let ollama_model = env_or("OLLAMA_MODEL", "llama3.2");
+        let ollama_model = env_or("OLLAMA_MODEL", "gemma4:12b-it-qat");
         Self {
             openai: HttpProviderConfig {
                 base_url: env_or("OPENAI_BASE_URL", "https://api.openai.com/v1"),
@@ -174,6 +175,12 @@ impl PipelineProviderConfig {
                 args: env_args("GROK_CLI_ARGS"),
                 timeout_seconds: env_u64("GROK_CLI_TIMEOUT", 600),
                 retries: env_u32("GROK_CLI_RETRIES", DEFAULT_CLI_RETRIES),
+            },
+            copilot: CliRuntimeConfig {
+                executable: env_or("COPILOT_CLI_BIN", "copilot"),
+                args: env_args("COPILOT_CLI_ARGS"),
+                timeout_seconds: env_u64("COPILOT_CLI_TIMEOUT", 600),
+                retries: env_u32("COPILOT_CLI_RETRIES", DEFAULT_CLI_RETRIES),
             },
         }
     }
@@ -914,15 +921,22 @@ fn resolve_vision_extractor_mode(config: &PipelineConfig) -> VisionMode {
 
 fn resolve_cli_vision_mode(mode: VisionMode, cli_provider: Option<CliProvider>) -> VisionMode {
     match (mode, cli_provider) {
-        (VisionMode::Codex | VisionMode::Claude | VisionMode::Grok, Some(CliProvider::Codex)) => {
-            VisionMode::Codex
-        }
-        (VisionMode::Codex | VisionMode::Claude | VisionMode::Grok, Some(CliProvider::Claude)) => {
-            VisionMode::Claude
-        }
-        (VisionMode::Codex | VisionMode::Claude | VisionMode::Grok, Some(CliProvider::Grok)) => {
-            VisionMode::Grok
-        }
+        (
+            VisionMode::Codex | VisionMode::Claude | VisionMode::Grok | VisionMode::Copilot,
+            Some(CliProvider::Codex),
+        ) => VisionMode::Codex,
+        (
+            VisionMode::Codex | VisionMode::Claude | VisionMode::Grok | VisionMode::Copilot,
+            Some(CliProvider::Claude),
+        ) => VisionMode::Claude,
+        (
+            VisionMode::Codex | VisionMode::Claude | VisionMode::Grok | VisionMode::Copilot,
+            Some(CliProvider::Grok),
+        ) => VisionMode::Grok,
+        (
+            VisionMode::Codex | VisionMode::Claude | VisionMode::Grok | VisionMode::Copilot,
+            Some(CliProvider::Copilot),
+        ) => VisionMode::Copilot,
         _ => mode,
     }
 }
@@ -974,6 +988,12 @@ fn build_vision_provider(
                 .with_timeout_seconds(provider_config.grok.timeout_seconds)
                 .with_retries(provider_config.grok.retries),
         )),
+        VisionMode::Copilot => Ok(Box::new(
+            CliVisionProvider::copilot(provider_config.copilot.executable.clone())
+                .with_args(provider_config.copilot.args.clone())
+                .with_timeout_seconds(provider_config.copilot.timeout_seconds)
+                .with_retries(provider_config.copilot.retries),
+        )),
         VisionMode::Deepseek => Err(PipelineError::Vision(
             "deepseek vision mode is out of scope for the Rust backend".to_string(),
         )),
@@ -994,17 +1014,33 @@ fn optional_env(key: &str) -> Option<String> {
 fn resolve_summarizer_provider(config: &PipelineConfig) -> SummarizerProvider {
     match (config.summarizer_provider, config.summarizer_cli_provider) {
         (
-            SummarizerProvider::Codex | SummarizerProvider::Claude | SummarizerProvider::Grok,
+            SummarizerProvider::Codex
+            | SummarizerProvider::Claude
+            | SummarizerProvider::Grok
+            | SummarizerProvider::Copilot,
             Some(CliProvider::Codex),
         ) => SummarizerProvider::Codex,
         (
-            SummarizerProvider::Codex | SummarizerProvider::Claude | SummarizerProvider::Grok,
+            SummarizerProvider::Codex
+            | SummarizerProvider::Claude
+            | SummarizerProvider::Grok
+            | SummarizerProvider::Copilot,
             Some(CliProvider::Claude),
         ) => SummarizerProvider::Claude,
         (
-            SummarizerProvider::Codex | SummarizerProvider::Claude | SummarizerProvider::Grok,
+            SummarizerProvider::Codex
+            | SummarizerProvider::Claude
+            | SummarizerProvider::Grok
+            | SummarizerProvider::Copilot,
             Some(CliProvider::Grok),
         ) => SummarizerProvider::Grok,
+        (
+            SummarizerProvider::Codex
+            | SummarizerProvider::Claude
+            | SummarizerProvider::Grok
+            | SummarizerProvider::Copilot,
+            Some(CliProvider::Copilot),
+        ) => SummarizerProvider::Copilot,
         _ => config.summarizer_provider,
     }
 }
@@ -1075,6 +1111,12 @@ fn build_summarizer(
                 .with_args(provider_config.grok.args.clone())
                 .with_timeout_seconds(provider_config.grok.timeout_seconds)
                 .with_retries(provider_config.grok.retries),
+        )),
+        SummarizerProvider::Copilot => Ok(Box::new(
+            CliSummarizer::copilot(provider_config.copilot.executable.clone())
+                .with_args(provider_config.copilot.args.clone())
+                .with_timeout_seconds(provider_config.copilot.timeout_seconds)
+                .with_retries(provider_config.copilot.retries),
         )),
     }
 }

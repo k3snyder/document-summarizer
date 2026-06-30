@@ -20,6 +20,7 @@ import {
   NavButton,
   ProcessView,
   SettingsView,
+  UpdateDialog,
   applyTheme,
   basename,
   errorMessage,
@@ -36,6 +37,7 @@ import type {
   DesktopSettings,
   PipelineConfig,
   ProviderAvailability,
+  UpdateInfo,
 } from "./types";
 import { DEFAULT_PIPELINE_CONFIG } from "./types";
 
@@ -47,6 +49,7 @@ export default function App() {
   });
   const [settings, setSettings] = React.useState<DesktopSettings | null>(null);
   const [settingsPath, setSettingsPath] = React.useState<string>("");
+  const [appVersion, setAppVersion] = React.useState<string>("");
   const [providerAvailability, setProviderAvailability] =
     React.useState<ProviderAvailabilityMap>({});
   const [jobs, setJobs] = React.useState<DesktopJob[]>([]);
@@ -62,6 +65,8 @@ export default function App() {
   const [notice, setNotice] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [isFileDragOver, setIsFileDragOver] = React.useState(false);
+  const [updateInfo, setUpdateInfo] = React.useState<UpdateInfo | null>(null);
+  const [updateDialogOpen, setUpdateDialogOpen] = React.useState(false);
   const providerAvailabilityRequestRef = React.useRef(0);
 
   const refreshHistory = React.useCallback(async () => {
@@ -118,9 +123,28 @@ export default function App() {
         );
       }),
       invoke<string>("settings_file_path").then(setSettingsPath),
+      invoke<string>("app_version").then(setAppVersion),
       refreshHistory(),
     ]).catch((err) => setError(errorMessage(err)));
   }, [refreshHistory]);
+
+  // Check the public GitHub repo for a newer release once on launch. This is
+  // non-blocking and deliberately fail-silent — a failed/disabled check never
+  // surfaces an error; the backend returns update_available=false.
+  React.useEffect(() => {
+    let canceled = false;
+    void (async () => {
+      try {
+        const info = await invoke<UpdateInfo>("check_for_update");
+        if (!canceled && info.update_available) setUpdateInfo(info);
+      } catch {
+        // Intentionally ignored: update checks are best-effort.
+      }
+    })();
+    return () => {
+      canceled = true;
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!settings) return;
@@ -406,6 +430,19 @@ export default function App() {
     setView("process");
   }
 
+  async function skipUpdateVersion(version: string) {
+    setUpdateDialogOpen(false);
+    setUpdateInfo(null);
+    try {
+      const saved = await invoke<DesktopSettings>("skip_update_version", {
+        version,
+      });
+      setSettings(normalizeDesktopSettings(saved));
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
   const sidebarStatus = activeJob
     ? {
         state: "processing",
@@ -481,7 +518,20 @@ export default function App() {
       </aside>
 
       <section className="workspace">
-        <Header view={view} activeJob={activeJob} onCancel={cancelActiveJob} />
+        <Header
+          view={view}
+          activeJob={activeJob}
+          updateInfo={updateInfo}
+          onOpenUpdate={() => setUpdateDialogOpen(true)}
+          onCancel={cancelActiveJob}
+        />
+        {updateDialogOpen && updateInfo && (
+          <UpdateDialog
+            info={updateInfo}
+            onClose={() => setUpdateDialogOpen(false)}
+            onSkip={skipUpdateVersion}
+          />
+        )}
         {notice && (
           <Banner
             tone="success"
@@ -544,6 +594,7 @@ export default function App() {
           <SettingsView
             settings={settings}
             settingsPath={settingsPath}
+            appVersion={appVersion}
             onSettingsChange={(nextSettings) => {
               const normalized = normalizeDesktopSettings(nextSettings);
               setSettings(normalized);

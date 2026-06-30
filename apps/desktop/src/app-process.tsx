@@ -69,7 +69,7 @@ export function ProcessView({
 
   return (
     <div className="pipeline-shell">
-      {!selectedFiles.length && (
+      {!selectedFiles.length && !activeJob && (
         <UploadPrompt
           isDragOver={isFileDragOver}
           onChooseFiles={onChooseFiles}

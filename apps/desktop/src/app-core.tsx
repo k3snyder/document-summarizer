@@ -39,6 +39,7 @@ export const DEFAULT_PROVIDER_VISIBILITY: ProviderVisibilitySettings = {
     codex: true,
     claude: false,
     grok: false,
+    copilot: false,
   },
   classifier: {
     llama_cpp: false,
@@ -47,6 +48,7 @@ export const DEFAULT_PROVIDER_VISIBILITY: ProviderVisibilitySettings = {
     codex: true,
     claude: false,
     grok: false,
+    copilot: false,
   },
   summarizer: {
     llama_cpp: false,
@@ -55,6 +57,7 @@ export const DEFAULT_PROVIDER_VISIBILITY: ProviderVisibilitySettings = {
     codex: true,
     claude: false,
     grok: false,
+    copilot: false,
   },
 };
 export const DEFAULT_LOGGING_SETTINGS = {
@@ -65,6 +68,10 @@ export const DEFAULT_LOGGING_SETTINGS = {
   capture_frontend: true,
   capture_dev_services: true,
   redact_secrets: true,
+};
+export const DEFAULT_UPDATE_SETTINGS = {
+  enabled: true,
+  skipped_version: null,
 };
 export const VISION_PROVIDER_OPTIONS: Array<{
   value: VisibleVisionProvider;
@@ -85,6 +92,11 @@ export const VISION_PROVIDER_OPTIONS: Array<{
     description: "Anthropic Claude via CLI",
   },
   { value: "grok", label: "Grok CLI", description: "xAI Grok Build via CLI" },
+  {
+    value: "copilot",
+    label: "Copilot CLI",
+    description: "GitHub Copilot via CLI",
+  },
 ];
 export const SUMMARIZER_PROVIDER_OPTIONS: Array<{
   value: SummarizerProvider;
@@ -105,6 +117,11 @@ export const SUMMARIZER_PROVIDER_OPTIONS: Array<{
     description: "Anthropic Claude via CLI",
   },
   { value: "grok", label: "Grok CLI", description: "xAI Grok Build via CLI" },
+  {
+    value: "copilot",
+    label: "Copilot CLI",
+    description: "GitHub Copilot via CLI",
+  },
 ];
 export const SUMMARIZER_MODE_OPTIONS: Array<{
   value: SummarizerMode;
@@ -240,6 +257,10 @@ export function normalizeDesktopSettings(
     logging: {
       ...DEFAULT_LOGGING_SETTINGS,
       ...(settings.logging ?? {}),
+    },
+    updates: {
+      ...DEFAULT_UPDATE_SETTINGS,
+      ...(settings.updates ?? {}),
     },
   };
 }
@@ -619,6 +640,7 @@ export function formatMetricProvider(provider?: string | null): string {
   if (provider === "codex") return "Codex CLI";
   if (provider === "claude") return "Claude CLI";
   if (provider === "grok") return "Grok CLI";
+  if (provider === "copilot") return "Copilot CLI";
   return labelize(provider);
 }
 

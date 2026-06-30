@@ -48,6 +48,7 @@ enum CliProviderKind {
     Generic,
     Codex,
     Grok,
+    Copilot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -404,6 +405,16 @@ impl CliVisionProvider {
         }
     }
 
+    pub fn copilot(executable: impl Into<String>) -> Self {
+        Self {
+            executable: executable.into(),
+            args: Vec::new(),
+            timeout_seconds: 600,
+            retries: 3,
+            kind: CliProviderKind::Copilot,
+        }
+    }
+
     pub fn with_args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.args = args.into_iter().map(Into::into).collect();
         self
@@ -429,6 +440,9 @@ impl CliVisionProvider {
         }
         if self.kind == CliProviderKind::Grok {
             return self.execute_grok_image(prompt, page).await;
+        }
+        if self.kind == CliProviderKind::Copilot {
+            return self.execute_copilot_image(prompt, page).await;
         }
 
         let context = cli_command_context(
@@ -636,6 +650,92 @@ impl CliVisionProvider {
         }
         Ok(content)
     }
+
+    async fn execute_copilot_image(
+        &self,
+        prompt: &str,
+        page: &VisionPage,
+    ) -> Result<String, PipelineError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| {
+            PipelineError::Vision(format!("could not create Copilot temp dir: {err}"))
+        })?;
+        let image_path = temp_dir
+            .path()
+            .join(format!("page_{}.png", page.page_number));
+        let image_bytes = decode_base64_image(&page.image_base64)?;
+        tokio::fs::write(&image_path, image_bytes)
+            .await
+            .map_err(|err| {
+                PipelineError::Vision(format!("could not write Copilot image: {err}"))
+            })?;
+
+        let request = format!(
+            "Read and analyze the image file {} in the current working directory for page {} / chunk {}.\n\n{prompt}\n\nReturn ONLY the requested result with no preamble.",
+            image_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("page.png"),
+            page.page_number,
+            page.chunk_id
+        );
+
+        self.execute_copilot_prompt(&request, Some(temp_dir.path()))
+            .await
+    }
+
+    async fn execute_copilot_prompt(
+        &self,
+        prompt: &str,
+        working_dir: Option<&Path>,
+    ) -> Result<String, PipelineError> {
+        let mut args = vec![
+            "-p".to_string(),
+            prompt.to_string(),
+            "--allow-all-tools".to_string(),
+            "--no-color".to_string(),
+            "-s".to_string(),
+        ];
+        if let Some(dir) = working_dir {
+            args.push("-C".to_string());
+            args.push(dir.display().to_string());
+        }
+        args.extend(self.args.clone());
+        let context = cli_command_context(
+            "Copilot CLI vision provider",
+            &self.executable,
+            &args,
+            self.timeout_seconds,
+        );
+        let executable = resolved_cli_executable_value(&self.executable);
+        let make_command = || {
+            let mut command = Command::new(&executable);
+            command
+                .args(&args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            command
+        };
+
+        let output = run_cli_command_with_retry(
+            make_command,
+            "",
+            &context,
+            self.timeout_seconds,
+            "CLI vision provider",
+            self.retry_policy(),
+        )
+        .await
+        .map_err(PipelineError::Vision)?;
+        let content = output.stdout.trim().to_string();
+        if content.is_empty() {
+            return Err(PipelineError::Vision(format!(
+                "Copilot CLI returned empty output; {context}; stderr={}",
+                output.stderr.trim()
+            )));
+        }
+        Ok(content)
+    }
 }
 
 fn resolved_cli_executable_value(executable: &str) -> String {
@@ -647,7 +747,7 @@ fn resolved_cli_executable_value(executable: &str) -> String {
 #[async_trait]
 impl VisionProvider for CliVisionProvider {
     async fn classify(&self, page: &VisionPage) -> Result<ClassificationResult, PipelineError> {
-        if self.kind == CliProviderKind::Codex {
+        if self.kind == CliProviderKind::Codex || self.kind == CliProviderKind::Copilot {
             return Ok(ClassificationResult {
                 page_number: page.page_number,
                 chunk_id: page.chunk_id.clone(),
