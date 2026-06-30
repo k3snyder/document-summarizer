@@ -1,0 +1,16 @@
+{
+  "favorites": [
+    {
+      "name": "default",
+      "title": "Default",
+      "description": "Process with the app's full default pipeline (vision + summarization on the user's configured providers). No overrides.",
+      "flags": []
+    },
+    {
+      "name": "vision-every-page",
+      "title": "Vision extraction on every page",
+      "description": "Skip the vision classifier and run visual extraction on every rendered page.",
+      "flags": ["--vision-skip-classification"]
+    }
+  ]
+}

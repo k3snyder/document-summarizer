@@ -1,0 +1,4 @@
+interface:
+  display_name: "Summarizer CLI"
+  short_description: "Enqueue docs into the running Document Summarizer app"
+  default_prompt: "Use $summarizer-cli to enqueue a document into the running Document Summarizer desktop app and return the structured JSON output."
