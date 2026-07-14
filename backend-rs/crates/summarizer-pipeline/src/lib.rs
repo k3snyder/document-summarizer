@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
+
 use summarizer_extraction::{ExtractionProgress, Extractor};
 use summarizer_summarization::{
     CliSummarizer, OpenAiCompatibleSummarizer, SummarizationBudgetExhaustReason,
@@ -14,6 +15,8 @@ use summarizer_vision::{
     CliVisionProvider, GeminiVisionProvider, OpenAiCompatibleVisionProvider, VisionPage,
     VisionProvider,
 };
+
+pub mod settings;
 
 pub use summarizer_extraction::configure_pdfium_library_path;
 
@@ -100,6 +103,7 @@ pub const DEFAULT_CLI_RETRIES: u32 = 3;
 pub struct CliRuntimeConfig {
     pub executable: String,
     pub args: Vec<String>,
+    pub model: Option<String>,
     pub timeout_seconds: u64,
     pub retries: u32,
 }
@@ -121,6 +125,8 @@ impl PipelineProviderConfig {
         let llama_model = env_or("LLAMA_CPP_MODEL", "model.gguf");
         let openai_model = env_or("OPENAI_MODEL", "gpt-4.1-mini");
         let ollama_model = env_or("OLLAMA_MODEL", "gemma4:12b-it-qat");
+        let codex_args = codex_env_args();
+        let codex_model = settings::cli_args_model(&codex_args.join(" "));
         Self {
             openai: HttpProviderConfig {
                 base_url: env_or("OPENAI_BASE_URL", "https://api.openai.com/v1"),
@@ -160,25 +166,29 @@ impl PipelineProviderConfig {
             },
             codex: CliRuntimeConfig {
                 executable: env_or("CODEX_CLI_BIN", "codex"),
-                args: env_args("CODEX_CLI_ARGS"),
+                args: codex_args,
+                model: codex_model,
                 timeout_seconds: env_u64("CODEX_CLI_TIMEOUT", 600),
                 retries: env_u32("CODEX_CLI_RETRIES", DEFAULT_CLI_RETRIES),
             },
             claude: CliRuntimeConfig {
                 executable: env_or("CLAUDE_CLI_BIN", "claude"),
                 args: env_args("CLAUDE_CLI_ARGS"),
+                model: None,
                 timeout_seconds: env_u64("CLAUDE_CLI_TIMEOUT", 600),
                 retries: env_u32("CLAUDE_CLI_RETRIES", DEFAULT_CLI_RETRIES),
             },
             grok: CliRuntimeConfig {
                 executable: env_or("GROK_CLI_BIN", "grok"),
                 args: env_args("GROK_CLI_ARGS"),
+                model: None,
                 timeout_seconds: env_u64("GROK_CLI_TIMEOUT", 600),
                 retries: env_u32("GROK_CLI_RETRIES", DEFAULT_CLI_RETRIES),
             },
             copilot: CliRuntimeConfig {
                 executable: env_or("COPILOT_CLI_BIN", "copilot"),
                 args: env_args("COPILOT_CLI_ARGS"),
+                model: None,
                 timeout_seconds: env_u64("COPILOT_CLI_TIMEOUT", 600),
                 retries: env_u32("COPILOT_CLI_RETRIES", DEFAULT_CLI_RETRIES),
             },
@@ -237,6 +247,8 @@ impl Pipeline {
         let progress: Arc<dyn Fn(PipelineProgress) + Send + Sync> = Arc::new(progress);
         let started = Instant::now();
         let extraction_started = Instant::now();
+        let selected_vision_model = resolved_vision_model(config, &self.provider_config);
+        let mut summarizer_model = resolved_summarizer_model(config, &self.provider_config);
         tracing::info!(
             target: "summarizer_pipeline",
             job_id,
@@ -249,7 +261,9 @@ impl Pipeline {
             vision_mode = %serde_name(config.vision_mode),
             vision_classifier_provider = ?resolved_vision_classifier_provider(config),
             vision_extractor_provider = ?resolved_vision_extractor_provider(config),
+            vision_model = %selected_vision_model.as_deref().unwrap_or("CLI default"),
             summarizer_provider = %serde_name(resolve_summarizer_provider(config)),
+            summarizer_model = %summarizer_model.as_deref().unwrap_or("CLI default"),
             summarizer_mode = %serde_name(config.summarizer_mode),
             summarizer_detailed_extraction = config.summarizer_detailed_extraction,
             summarizer_insight_mode = config.summarizer_insight_mode,
@@ -321,7 +335,7 @@ impl Pipeline {
             ),
         );
 
-        let vision_metrics = run_vision_stage(
+        let vision_result = run_vision_stage(
             &mut output.pages,
             config,
             &self.provider_config,
@@ -330,6 +344,8 @@ impl Pipeline {
             job_id,
         )
         .await?;
+        let vision_metrics = vision_result.metrics;
+        let vision_model = vision_result.model.or(selected_vision_model);
 
         let mut summarization_metrics = StageMetrics::empty();
         if config.run_summarization
@@ -361,6 +377,7 @@ impl Pipeline {
                 stage = "summarization",
                 pages = output.pages.len(),
                 provider = %serde_name(resolve_summarizer_provider(config)),
+                model = %summarizer_model.as_deref().unwrap_or("CLI default"),
                 mode = %serde_name(config.summarizer_mode),
                 "Summarization started"
             );
@@ -485,6 +502,7 @@ impl Pipeline {
             summarization_metrics.tokens = total_tokens;
             summarization_metrics.avg_relevancy = average_percent(&relevancies);
             summarization_metrics.total_attempts = Some(total_attempts);
+            summarizer_model = summarizer.reported_model().or(summarizer_model);
             tracing::info!(
                 target: "summarizer_pipeline",
                 job_id,
@@ -493,6 +511,7 @@ impl Pipeline {
                 pages = summarization_metrics.pages_processed,
                 tokens = summarization_metrics.tokens,
                 attempts = total_attempts,
+                model = %summarizer_model.as_deref().unwrap_or("CLI default"),
                 "Summarization completed"
             );
         }
@@ -522,7 +541,9 @@ impl Pipeline {
                 vision_mode: Some(serde_name(config.vision_mode)),
                 vision_classifier_provider: resolved_vision_classifier_provider(config),
                 vision_extractor_provider: resolved_vision_extractor_provider(config),
+                vision_model,
                 summarizer_provider: resolved_summarizer_provider(config),
+                summarizer_model,
                 summarizer_mode: Some(serde_name(config.summarizer_mode)),
             },
         });
@@ -534,6 +555,12 @@ impl Pipeline {
         }
 
         let metrics = output.metrics.as_ref();
+        let vision_model = metrics
+            .and_then(|metrics| metrics.config.vision_model.as_deref())
+            .unwrap_or("CLI default");
+        let summarizer_model = metrics
+            .and_then(|metrics| metrics.config.summarizer_model.as_deref())
+            .unwrap_or("CLI default");
         tracing::info!(
             target: "summarizer_pipeline",
             job_id,
@@ -554,6 +581,8 @@ impl Pipeline {
             extracted_count = ?metrics.and_then(|metrics| metrics.stages.vision.extracted_count),
             summarization_attempts = ?metrics.and_then(|metrics| metrics.stages.summarization.total_attempts),
             avg_relevancy = ?metrics.and_then(|metrics| metrics.stages.summarization.avg_relevancy),
+            vision_model,
+            summarizer_model,
             "Pipeline completed"
         );
         Ok(output)
@@ -604,6 +633,59 @@ fn resolved_summarizer_provider(config: &PipelineConfig) -> Option<String> {
     Some(serde_name(resolve_summarizer_provider(config)))
 }
 
+fn resolved_vision_model(
+    config: &PipelineConfig,
+    provider_config: &PipelineProviderConfig,
+) -> Option<String> {
+    if config.vision_mode == VisionMode::None || config.extract_only {
+        return None;
+    }
+    let model = match resolve_vision_extractor_mode(config) {
+        VisionMode::LlamaCpp => &provider_config.llama_cpp.vision_model,
+        VisionMode::Openai => &provider_config.openai.vision_model,
+        VisionMode::Ollama => &provider_config.ollama.vision_model,
+        VisionMode::Gemini => &provider_config.gemini.vision_model,
+        VisionMode::Codex => return provider_config.codex.model.clone(),
+        VisionMode::Claude => return provider_config.claude.model.clone(),
+        VisionMode::Grok => return provider_config.grok.model.clone(),
+        VisionMode::Copilot => return provider_config.copilot.model.clone(),
+        VisionMode::None | VisionMode::Deepseek => return None,
+    };
+    non_empty_model(model)
+}
+
+fn resolved_summarizer_model(
+    config: &PipelineConfig,
+    provider_config: &PipelineProviderConfig,
+) -> Option<String> {
+    if !config.run_summarization
+        || config.summarizer_mode == SummarizerMode::Skip
+        || config.extract_only
+    {
+        return None;
+    }
+    let model = match resolve_summarizer_provider(config) {
+        SummarizerProvider::LlamaCpp => &provider_config.llama_cpp.model,
+        SummarizerProvider::Openai => &provider_config.openai.model,
+        SummarizerProvider::Ollama => &provider_config.ollama.model,
+        SummarizerProvider::Codex => return provider_config.codex.model.clone(),
+        SummarizerProvider::Claude => return provider_config.claude.model.clone(),
+        SummarizerProvider::Grok => return provider_config.grok.model.clone(),
+        SummarizerProvider::Copilot => return provider_config.copilot.model.clone(),
+    };
+    non_empty_model(model)
+}
+
+fn non_empty_model(model: &str) -> Option<String> {
+    let model = model.trim();
+    (!model.is_empty()).then(|| model.to_string())
+}
+
+struct VisionStageResult {
+    metrics: StageMetrics,
+    model: Option<String>,
+}
+
 async fn run_vision_stage(
     pages: &mut [summarizer_types::PageOutput],
     config: &PipelineConfig,
@@ -611,10 +693,15 @@ async fn run_vision_stage(
     stages: &[PipelineProgressStage],
     progress: &(dyn Fn(PipelineProgress) + Send + Sync),
     job_id: &str,
-) -> Result<StageMetrics, PipelineError> {
+) -> Result<VisionStageResult, PipelineError> {
     if config.vision_mode == VisionMode::None || config.extract_only {
-        return Ok(StageMetrics::empty());
+        return Ok(VisionStageResult {
+            metrics: StageMetrics::empty(),
+            model: None,
+        });
     }
+
+    let selected_model = resolved_vision_model(config, provider_config);
 
     emit_progress(
         progress,
@@ -657,9 +744,12 @@ async fn run_vision_stage(
                 "Vision skipped because no page images were available.",
             ),
         );
-        return Ok(StageMetrics {
-            pages_with_images: Some(0),
-            ..StageMetrics::empty()
+        return Ok(VisionStageResult {
+            metrics: StageMetrics {
+                pages_with_images: Some(0),
+                ..StageMetrics::empty()
+            },
+            model: selected_model,
         });
     }
 
@@ -686,6 +776,7 @@ async fn run_vision_stage(
         pages_with_images,
         classifier_provider = ?classifier_provider_name,
         extractor_provider = %extractor_provider_name,
+        model = %selected_model.as_deref().unwrap_or("CLI default"),
         skip_classification = config.vision_skip_classification,
         "Vision started"
     );
@@ -891,6 +982,7 @@ async fn run_vision_stage(
         avg_relevancy: None,
         total_attempts: None,
     };
+    let model = extractor_provider.reported_model().or(selected_model);
     tracing::info!(
         target: "summarizer_pipeline",
         job_id,
@@ -900,9 +992,10 @@ async fn run_vision_stage(
         classified_count,
         extracted_count,
         tokens = metrics.tokens,
+        model = %model.as_deref().unwrap_or("CLI default"),
         "Vision completed"
     );
-    Ok(metrics)
+    Ok(VisionStageResult { metrics, model })
 }
 
 fn resolve_vision_classifier_mode(config: &PipelineConfig) -> VisionMode {
@@ -1331,14 +1424,30 @@ fn average_percent(values: &[usize]) -> Option<u8> {
 
 fn env_args(key: &str) -> Vec<String> {
     std::env::var(key)
-        .map(|value| {
-            value
-                .split_whitespace()
-                .filter(|arg| !arg.is_empty())
-                .map(ToString::to_string)
-                .collect()
-        })
+        .map(|value| split_env_args(&value))
         .unwrap_or_default()
+}
+
+fn codex_env_args() -> Vec<String> {
+    let raw_args = std::env::var("CODEX_CLI_ARGS").unwrap_or_default();
+    codex_args_with_model(optional_env("CODEX_CLI_MODEL").as_deref(), &raw_args)
+}
+
+fn codex_args_with_model(model: Option<&str>, raw_args: &str) -> Vec<String> {
+    let mut args = split_env_args(raw_args);
+    let model = model.map(str::trim).filter(|model| !model.is_empty());
+    if let Some(model) = model.filter(|_| !settings::cli_args_select_model(raw_args)) {
+        args.splice(0..0, ["--model".to_string(), model.to_string()]);
+    }
+    args
+}
+
+fn split_env_args(value: &str) -> Vec<String> {
+    value
+        .split_whitespace()
+        .filter(|arg| !arg.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn env_usize(key: &str, default: usize) -> usize {
@@ -1361,4 +1470,75 @@ fn env_u32(key: &str, default: u32) -> u32 {
         .and_then(|value| value.parse().ok())
         .map(|value: u32| value.max(1))
         .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::PipelineProviderConfig;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn capture(key: &'static str) -> Self {
+            Self {
+                key,
+                previous: std::env::var_os(key),
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    #[test]
+    fn codex_model_environment_obeys_custom_args_precedence() {
+        let _model_guard = EnvVarGuard::capture("CODEX_CLI_MODEL");
+        let _args_guard = EnvVarGuard::capture("CODEX_CLI_ARGS");
+
+        std::env::set_var("CODEX_CLI_MODEL", "  gpt-5.5  ");
+        std::env::remove_var("CODEX_CLI_ARGS");
+        let config = PipelineProviderConfig::from_env();
+        assert_eq!(config.codex.args, vec!["--model", "gpt-5.5"]);
+        assert_eq!(config.codex.model.as_deref(), Some("gpt-5.5"));
+
+        std::env::remove_var("CODEX_CLI_MODEL");
+        let config = PipelineProviderConfig::from_env();
+        assert!(config.codex.args.is_empty());
+        assert_eq!(config.codex.model, None);
+
+        for (raw_args, expected_args, expected_model) in [
+            (
+                "-m other --search",
+                vec!["-m", "other", "--search"],
+                Some("other"),
+            ),
+            (
+                "-mother --search",
+                vec!["-mother", "--search"],
+                Some("other"),
+            ),
+            (
+                "-m=other --search",
+                vec!["-m=other", "--search"],
+                Some("other"),
+            ),
+            ("-m= --search", vec!["-m=", "--search"], None),
+        ] {
+            std::env::set_var("CODEX_CLI_MODEL", "gpt-5.6-terra");
+            std::env::set_var("CODEX_CLI_ARGS", raw_args);
+            let config = PipelineProviderConfig::from_env();
+            assert_eq!(config.codex.args, expected_args);
+            assert_eq!(config.codex.model.as_deref(), expected_model);
+        }
+    }
 }

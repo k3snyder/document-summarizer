@@ -34,22 +34,17 @@ pub struct JobCreateResponse {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub enum PdfImageDpi {
     #[serde(rename = "72")]
     Dpi72,
     #[serde(rename = "144")]
     Dpi144,
     #[serde(rename = "200")]
+    #[default]
     Dpi200,
     #[serde(rename = "300")]
     Dpi300,
-}
-
-impl Default for PdfImageDpi {
-    fn default() -> Self {
-        Self::Dpi200
-    }
 }
 
 impl PdfImageDpi {
@@ -63,9 +58,10 @@ impl PdfImageDpi {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VisionMode {
+    #[default]
     None,
     Deepseek,
     Gemini,
@@ -78,42 +74,26 @@ pub enum VisionMode {
     Copilot,
 }
 
-impl Default for VisionMode {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum SummarizerMode {
+    #[default]
     Full,
     TopicsOnly,
     Skip,
 }
 
-impl Default for SummarizerMode {
-    fn default() -> Self {
-        Self::Full
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SummarizerProvider {
     Ollama,
+    #[default]
     LlamaCpp,
     Openai,
     Codex,
     Claude,
     Grok,
     Copilot,
-}
-
-impl Default for SummarizerProvider {
-    fn default() -> Self {
-        Self::LlamaCpp
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -139,6 +119,8 @@ pub struct PipelineConfig {
     pub skip_pptx_tables: bool,
     #[serde(default)]
     pub text_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_range: Option<String>,
     #[serde(default, deserialize_with = "deserialize_pdf_image_dpi")]
     pub pdf_image_dpi: PdfImageDpi,
     #[serde(default)]
@@ -187,6 +169,7 @@ impl Default for PipelineConfig {
             skip_images: false,
             skip_pptx_tables: false,
             text_only: false,
+            page_range: None,
             pdf_image_dpi: PdfImageDpi::Dpi200,
             vision_mode: VisionMode::None,
             vision_classifier_mode: None,
@@ -207,6 +190,77 @@ impl Default for PipelineConfig {
             keep_base64_images: false,
         }
     }
+}
+
+impl PipelineConfig {
+    /// The desktop product default: Step 2 Vision and summarization on Codex.
+    /// Distinct from `PipelineConfig::default()` (bare type defaults, vision off).
+    pub fn desktop_default() -> Self {
+        Self {
+            vision_mode: VisionMode::Codex,
+            summarizer_provider: SummarizerProvider::Codex,
+            ..Self::default()
+        }
+    }
+
+    /// Apply a partial config JSON object on top of the desktop default pipeline
+    /// config.
+    ///
+    /// The override is a (possibly partial) JSON object: only the keys it contains
+    /// change, and every field it omits keeps its desktop default (e.g. Step 2
+    /// Vision stays on Codex). Deserializing the override standalone would instead
+    /// reset omitted fields to `PipelineConfig::default()` - notably
+    /// `vision_mode = None` - which silently disables vision whenever a caller
+    /// flips a single unrelated toggle like `vision_skip_classification`.
+    pub fn merge_json_onto_desktop_default(raw: &str) -> Result<Self, String> {
+        let overrides: serde_json::Value =
+            serde_json::from_str(raw).map_err(|err| format!("Invalid config JSON: {err}"))?;
+        let serde_json::Value::Object(overrides) = overrides else {
+            return Err("config JSON must be a JSON object.".to_string());
+        };
+        let mut merged = serde_json::to_value(Self::desktop_default())
+            .map_err(|err| format!("Could not encode default config: {err}"))?;
+        if let Some(base) = merged.as_object_mut() {
+            for (key, value) in overrides {
+                base.insert(key, value);
+            }
+        }
+        serde_json::from_value(merged).map_err(|err| format!("Invalid config JSON: {err}"))
+    }
+}
+
+pub fn parse_page_range(spec: &str) -> Result<Vec<usize>, String> {
+    let mut pages = std::collections::BTreeSet::new();
+    for segment in spec.split(',') {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            return Err("page range contains an empty segment".to_string());
+        }
+        if let Some((start, end)) = segment.split_once('-') {
+            let start = parse_page_number(start)?;
+            let end = parse_page_number(end)?;
+            if start > end {
+                return Err(format!(
+                    "page range start {start} is greater than end {end}"
+                ));
+            }
+            pages.extend(start..=end);
+        } else {
+            pages.insert(parse_page_number(segment)?);
+        }
+    }
+    Ok(pages.into_iter().collect())
+}
+
+fn parse_page_number(value: &str) -> Result<usize, String> {
+    let page = value
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| format!("invalid page number '{value}'"))?;
+    if page == 0 {
+        return Err("page numbers are 1-based and must be greater than zero".to_string());
+    }
+    Ok(page)
 }
 
 fn default_true() -> bool {
@@ -381,7 +435,11 @@ pub struct PipelineMetricsConfig {
     pub vision_classifier_provider: Option<String>,
     #[serde(default)]
     pub vision_extractor_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_model: Option<String>,
     pub summarizer_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summarizer_model: Option<String>,
     pub summarizer_mode: Option<String>,
 }
 
@@ -550,4 +608,68 @@ where
     }
 
     Ok(Some(number.round() as u8))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        parse_page_range, PipelineConfig, PipelineMetricsConfig, SummarizerProvider, VisionMode,
+    };
+
+    #[test]
+    fn desktop_default_enables_codex_vision_and_summary() {
+        let config = PipelineConfig::desktop_default();
+
+        assert_eq!(config.vision_mode, VisionMode::Codex);
+        assert_eq!(config.summarizer_provider, SummarizerProvider::Codex);
+    }
+
+    #[test]
+    fn config_json_override_merges_onto_desktop_default() {
+        let config = PipelineConfig::merge_json_onto_desktop_default(
+            r#"{"vision_skip_classification":true}"#,
+        )
+        .unwrap();
+
+        assert!(config.vision_skip_classification);
+        assert_eq!(config.vision_mode, VisionMode::Codex);
+        assert_eq!(config.summarizer_provider, SummarizerProvider::Codex);
+    }
+
+    #[test]
+    fn config_json_override_rejects_non_object() {
+        let error = PipelineConfig::merge_json_onto_desktop_default("[1,2,3]").unwrap_err();
+
+        assert_eq!(error, "config JSON must be a JSON object.");
+    }
+
+    #[test]
+    fn page_range_parser_sorts_and_dedupes() {
+        assert_eq!(parse_page_range("3,1-2,2").unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn page_range_parser_rejects_invalid_specs() {
+        assert!(parse_page_range("0").is_err());
+        assert!(parse_page_range("3-2").is_err());
+        assert!(parse_page_range("1,,2").is_err());
+    }
+
+    #[test]
+    fn legacy_pipeline_metrics_config_defaults_model_fields_to_none() {
+        let config: PipelineMetricsConfig = serde_json::from_value(serde_json::json!({
+            "vision_mode": "codex",
+            "vision_classifier_provider": "codex",
+            "vision_extractor_provider": "codex",
+            "summarizer_provider": "codex",
+            "summarizer_mode": "full"
+        }))
+        .unwrap();
+
+        assert_eq!(config.vision_model, None);
+        assert_eq!(config.summarizer_model, None);
+        let serialized = serde_json::to_value(config).unwrap();
+        assert!(serialized.get("vision_model").is_none());
+        assert!(serialized.get("summarizer_model").is_none());
+    }
 }

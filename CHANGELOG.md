@@ -9,6 +9,65 @@ and the backend crate manifests on the same version.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-14
+
+### Added
+
+- Added a standalone headless `summarizer-cli` binary that runs the full
+  extraction/vision/summarization pipeline with no GUI: `--config-json`,
+  repeatable `--set key=value`, `--output`, `--markdown`, `--settings`,
+  `--env-providers`, `--pdfium`, `--job-id`, and `--quiet`. It emits a single
+  JSON manifest on stdout with deterministic exit codes (`0` completed, `1`
+  pipeline failure, `2` usage/config, `3` environment) and resolves PDFium
+  explicitly (flag, `SUMMARIZER_PDFIUM`, installed app resources, dev tree) —
+  never via implicit download.
+- Bundled `summarizer-cli` into the macOS app as a sidecar under
+  `Contents/Resources/resources/bin/`, so installed agent skills can resolve
+  it without a repo checkout. `npm run tauri:build` builds and stages it
+  automatically via `apps/desktop/scripts/prepare-cli-resource.sh`.
+- Added Codex CLI model selection: a `Codex model` dropdown in Settings
+  (CLI default, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`)
+  and a `CODEX_CLI_MODEL` environment override for headless runs. Custom
+  Codex args always take precedence, and `--model` is never emitted twice.
+- Surfaced the actual model used (not just the provider) in output metrics
+  (`metrics.config.vision_model` / `summarizer_model`), job logs, and the
+  Processing Metrics provider tiles, preferring the provider-reported model
+  over the configured one.
+- Added `--doctor` (settings/PDFium/provider preflight with local endpoint
+  probes) and `--estimate` (provider-free page/stage/call-count and time-band
+  projection) modes to the CLI and agent skill.
+- Added page-range and sampling support (`page_range` config; `--pages` /
+  `--sample` in the skill) threaded through PDF, PPTX, DOCX, TXT, and
+  Markdown extraction.
+- Expanded the `summarizer-cli` agent skillpack into a full workbench:
+  CLI-first execution with app-enqueue fallback (`--backend auto|cli|app`), an
+  append-only run catalog with content-hash caching
+  (`~/.summarizer/cli-runs.jsonl`), batch processing
+  (`--dir`/`--files`/`--glob`/`--parallel`), detached jobs
+  (`--detach`/`--status`/`--wait`/`--cancel`), result queries and exports
+  (`query_result.py`), OKF passthrough (`--okf`), corpus briefs
+  (`synthesize.py`), a corpus dataset compiler (`to_dataset.py`), an installer
+  (`install_skill.sh`), and a stdlib-only test harness.
+- Added `to_okf.py`: converts a summarizer `output.json` into a Google Open
+  Knowledge Format (OKF v0.1) directory bundle or single markdown file.
+
+### Changed
+
+- Moved provider settings and CLI argument construction into the shared
+  pipeline crate (`summarizer_pipeline::settings`) so the desktop app and the
+  headless CLI use identical provider configuration, and partial config
+  overrides merge onto the desktop defaults everywhere.
+- CLI runs are recorded in the CLI catalog rather than the desktop app's
+  History; use `--backend app` when History visibility is wanted.
+
+### Security
+
+- Added an image decompression-bomb guard to PPTX/DOCX image extraction: a
+  header-only dimension check (16-million-pixel cap) rejects oversized images
+  before decode, mirroring the existing vision-path guard.
+- Hardened project CI: the `GITHUB_TOKEN` is restricted to read-only contents,
+  and the PDFium test-library download is SHA-256-pinned before extraction.
+
 ## [0.3.0] - 2026-06-30
 
 ### Added
@@ -117,7 +176,8 @@ and the backend crate manifests on the same version.
   logs under `~/.summarizer`.
 - Headless Axum server and HTTP CLI for local workflow automation.
 
-[Unreleased]: https://github.com/k3snyder/document-summarizer/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/k3snyder/document-summarizer/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/k3snyder/document-summarizer/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/k3snyder/document-summarizer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/k3snyder/document-summarizer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/k3snyder/document-summarizer/releases/tag/v0.1.0

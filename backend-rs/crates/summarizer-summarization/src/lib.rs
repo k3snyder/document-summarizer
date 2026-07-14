@@ -3,10 +3,11 @@ use reqwest::{Client, Response, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::json;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use summarizer_cli_util::{
     cli_command_context, configure_isolated_grok_command, create_isolated_grok_home,
-    parse_codex_jsonl, parse_grok_json, resolve_cli_executable, run_cli_command_with_retry,
+    parse_codex_jsonl_output, parse_grok_json, resolve_cli_executable, run_cli_command_with_retry,
     RetryPolicy,
 };
 use summarizer_types::{PageOutput, PipelineError, SummarizerMode};
@@ -146,6 +147,10 @@ pub trait Summarizer: Send + Sync {
         page: &PageOutput,
         options: SummarizationOptions,
     ) -> Result<SummarizationResult, PipelineError>;
+
+    fn reported_model(&self) -> Option<String> {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -705,6 +710,7 @@ pub struct CliSummarizer {
     timeout_seconds: u64,
     retries: u32,
     kind: CliProviderKind,
+    reported_model: Arc<Mutex<Option<String>>>,
 }
 
 impl CliSummarizer {
@@ -715,6 +721,7 @@ impl CliSummarizer {
             timeout_seconds: 600,
             retries: 3,
             kind: CliProviderKind::Generic,
+            reported_model: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -725,6 +732,7 @@ impl CliSummarizer {
             timeout_seconds: 600,
             retries: 3,
             kind: CliProviderKind::Codex,
+            reported_model: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -735,6 +743,7 @@ impl CliSummarizer {
             timeout_seconds: 600,
             retries: 3,
             kind: CliProviderKind::Grok,
+            reported_model: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -745,6 +754,7 @@ impl CliSummarizer {
             timeout_seconds: 600,
             retries: 3,
             kind: CliProviderKind::Copilot,
+            reported_model: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -850,15 +860,20 @@ impl CliSummarizer {
         )
         .await
         .map_err(PipelineError::Summarization)?;
-        let content = parse_codex_jsonl(&output.stdout);
-        if content.trim().is_empty() {
+        let parsed = parse_codex_jsonl_output(&output.stdout);
+        if let Some(model) = parsed.model {
+            if let Ok(mut reported_model) = self.reported_model.lock() {
+                *reported_model = Some(model);
+            }
+        }
+        if parsed.content.trim().is_empty() {
             return Err(PipelineError::Summarization(format!(
                 "Codex CLI returned no assistant message; {context}; stdout={}; stderr={}",
                 output.stdout.trim(),
                 output.stderr.trim()
             )));
         }
-        Ok(clean_response_content(&content))
+        Ok(clean_response_content(&parsed.content))
     }
 
     async fn execute_grok_prompt(&self, prompt: &str) -> Result<String, PipelineError> {
@@ -1058,6 +1073,10 @@ impl Summarizer for CliSummarizer {
             SummarizerMode::TopicsOnly => self.summarize_topics_only(page).await,
             SummarizerMode::Full => self.summarize_full(page).await,
         }
+    }
+
+    fn reported_model(&self) -> Option<String> {
+        self.reported_model.lock().ok()?.clone()
     }
 }
 

@@ -30,12 +30,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from _common import SkillError, first_description, load_output, page_number, visual_text
 
 OKF_VERSION = "0.1"
 SLIDE_EXTS = (".pptx", ".ppt")
@@ -49,49 +50,8 @@ def eprint(message: str) -> None:
     print(message, file=sys.stderr)
 
 
-def summarizer_home() -> Path:
-    home = os.environ.get("SUMMARIZER_HOME") or os.environ.get("HOME")
-    if not home:
-        raise OkfError("Could not determine home directory (set HOME or SUMMARIZER_HOME).")
-    return Path(home).expanduser() / ".summarizer"
-
-
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-# ----------------------------- loading -----------------------------
-
-
-def load_output(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
-    if args.input:
-        path = Path(args.input).expanduser()
-    elif args.job_id:
-        path = summarizer_home() / "jobs" / args.job_id / "output.json"
-    else:  # --latest
-        history_path = summarizer_home() / "history.json"
-        try:
-            history = json.loads(history_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise OkfError(f"Could not read history.json: {exc}") from exc
-        completed = [
-            job
-            for job in history
-            if isinstance(job, dict) and job.get("status") == "completed" and job.get("job_id")
-        ]
-        if not completed:
-            raise OkfError("No completed jobs found in history.json.")
-        path = summarizer_home() / "jobs" / completed[0]["job_id"] / "output.json"
-
-    if not path.is_file():
-        raise OkfError(f"output.json not found: {path}")
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise OkfError(f"Could not parse {path}: {exc}") from exc
-    if not isinstance(data, dict) or "document" not in data:
-        raise OkfError(f"{path} is not a summarizer output (missing 'document').")
-    return data, path
 
 
 # ----------------------------- helpers -----------------------------
@@ -148,32 +108,6 @@ def table_to_md(table: list[list[Any]]) -> list[str]:
         if i == 0:
             lines.append("|" + "|".join(["---"] * ncol) + "|")
     return lines
-
-
-def page_number(page: dict[str, Any], idx: int) -> int:
-    value = page.get("page_number")
-    return value if isinstance(value, int) and value > 0 else idx + 1
-
-
-def visual_text(page: dict[str, Any]) -> str:
-    parts = [
-        page.get("image_text"),
-        page.get("image_text_1"),
-        page.get("image_text_2"),
-        page.get("image_text_3"),
-    ]
-    return "\n\n".join(part.strip() for part in parts if isinstance(part, str) and part.strip())
-
-
-def first_description(page: dict[str, Any]) -> str:
-    notes = page.get("summary_notes") or []
-    if notes:
-        return str(notes[0]).strip()
-    text = (page.get("text") or "").strip()
-    if text:
-        flat = " ".join(text.split())
-        return (flat[:117] + "…") if len(flat) > 120 else flat
-    return visual_text(page)[:120].strip()
 
 
 def page_sections(page: dict[str, Any], level: int) -> list[str]:
@@ -408,6 +342,7 @@ def build_parser() -> argparse.ArgumentParser:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--input", help="Path to an output.json")
     source.add_argument("--job-id", help="Resolve ~/.summarizer/jobs/<id>/output.json")
+    source.add_argument("--run", help="Resolve a CLI catalog run id, or 'latest'")
     source.add_argument(
         "--latest", action="store_true", help="Use the newest completed job in history.json"
     )
@@ -428,8 +363,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def run(argv: list[str] | None = None) -> dict[str, Any]:
+    args = build_parser().parse_args(argv)
     output, source_path = load_output(args)
 
     if args.granularity == "single":
@@ -444,6 +379,11 @@ def main() -> int:
         manifest = to_okf_bundle(output, out_root, args)
 
     manifest["source_output_json"] = str(source_path)
+    return manifest
+
+
+def main() -> int:
+    manifest = run()
     print(json.dumps(manifest, indent=2))
     return 0
 
@@ -451,6 +391,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except OkfError as exc:
+    except (OkfError, SkillError) as exc:
         eprint(f"ERROR: {exc}")
         raise SystemExit(1)

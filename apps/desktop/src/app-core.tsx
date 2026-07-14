@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { SelectOption } from "./app-common";
 import {
   DEFAULT_PIPELINE_CONFIG,
   DesktopJob,
@@ -142,6 +143,13 @@ export const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = [
   "high",
   "xhigh",
   "max",
+];
+export const CODEX_MODEL_OPTIONS: ReadonlyArray<SelectOption> = [
+  { value: "", label: "CLI default" },
+  { value: "gpt-5.6-sol", label: "gpt-5.6-sol (flagship)" },
+  { value: "gpt-5.6-terra", label: "gpt-5.6-terra (balanced)" },
+  { value: "gpt-5.6-luna", label: "gpt-5.6-luna (fast)" },
+  { value: "gpt-5.5", label: "gpt-5.5" },
 ];
 
 export function upsertJob(

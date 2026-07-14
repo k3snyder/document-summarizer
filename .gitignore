@@ -9,6 +9,10 @@ apps/desktop/dist/
 # Packaged release artifacts (distributed via GitHub Releases)
 /release/
 
+# Python bytecode (agent skill scripts)
+__pycache__/
+*.py[cod]
+
 # OS / editor noise
 .DS_Store
 *.log

@@ -1,0 +1,66 @@
+{
+  "document": {
+    "document_id": "doc_fixture",
+    "filename": "sample.txt",
+    "total_pages": 3,
+    "metadata": {
+      "title": "Fixture Document"
+    }
+  },
+  "pages": [
+    {
+      "chunk_id": "chunk_1",
+      "doc_title": "sample.txt",
+      "page_number": 1,
+      "text": "Revenue grew in the first quarter. Customer retention improved.",
+      "tables": [],
+      "summary_notes": [
+        "Revenue and retention improved in Q1."
+      ],
+      "summary_topics": [
+        "Revenue",
+        "Retention"
+      ],
+      "summary_relevancy": 92,
+      "summary_quality_validated": true
+    },
+    {
+      "chunk_id": "chunk_2",
+      "doc_title": "sample.txt",
+      "page_number": 2,
+      "text": "The operating table includes commas and quoted cells.",
+      "tables": [
+        [
+          ["Metric", "Value", "Note"],
+          ["Revenue", "1,200", "Contains, comma"],
+          ["Quote", "\"Yes\"", "Line one\nLine two"]
+        ]
+      ],
+      "summary_notes": [],
+      "summary_topics": [
+        "Operations"
+      ]
+    },
+    {
+      "chunk_id": "chunk_3",
+      "doc_title": "sample.txt",
+      "page_number": 3,
+      "text": "Visual appendix.",
+      "tables": [],
+      "image_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+      "embedded_images": [
+        {
+          "id": "img1",
+          "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        }
+      ],
+      "image_text": "A tiny visual marker.",
+      "summary_notes": null,
+      "summary_topics": null
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 123,
+    "total_tokens": 42
+  }
+}

@@ -963,6 +963,7 @@ mod tests {
                 "tokens": 1234,
                 "total_tokens": 5678,
                 "classification_tokens": 9,
+                "model": "gpt-5.6-luna",
                 "safe": "visible"
             }),
         };
@@ -976,6 +977,7 @@ mod tests {
         assert_eq!(event.fields["tokens"], 1234);
         assert_eq!(event.fields["total_tokens"], 5678);
         assert_eq!(event.fields["classification_tokens"], 9);
+        assert_eq!(event.fields["model"], "gpt-5.6-luna");
         assert_eq!(event.fields["safe"], "visible");
     }
 

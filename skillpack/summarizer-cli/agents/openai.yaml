@@ -1,4 +1,4 @@
 interface:
   display_name: "Summarizer CLI"
-  short_description: "Enqueue docs into the running Document Summarizer app"
-  default_prompt: "Use $summarizer-cli to enqueue a document into the running Document Summarizer desktop app and return the structured JSON output."
+  short_description: "Run docs through Document Summarizer headlessly"
+  default_prompt: "Use $summarizer-cli to process documents with the headless CLI when available, falling back to the desktop app only when History visibility is required. Honor the favorites gate before processing; automation wrappers should pass --require-favorite with an explicit --favorite."

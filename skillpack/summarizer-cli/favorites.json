@@ -10,7 +10,22 @@
       "name": "vision-every-page",
       "title": "Vision extraction on every page",
       "description": "Skip the vision classifier and run visual extraction on every rendered page.",
-      "flags": ["--vision-skip-classification"]
+      "flags": [
+        "--vision-skip-classification"
+      ]
+    },
+    {
+      "name": "finetune-ingest",
+      "title": "Fine-tune corpus ingestion",
+      "description": "Factory corpus ingestion: llama_cpp summarizer (HTTP path -> 3x detailed extraction + relevancy + validation, on the LAN Gemma 12B QAT), codex vision for decks/diagrams. Keep flags stable so the config hash keeps the cache coherent.",
+      "flags": [
+        "--vision-mode",
+        "codex",
+        "--summarizer-provider",
+        "llama_cpp",
+        "--config-json",
+        "{\"summarizer_detailed_extraction\": true}"
+      ]
     }
   ]
 }

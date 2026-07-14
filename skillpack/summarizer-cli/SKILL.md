@@ -1,22 +1,24 @@
 ---
 name: summarizer-cli
-description: Submit a local document to the running Document Summarizer desktop app and retrieve the structured output. Use when an agent needs to process a PDF, PPTX, DOCX, TXT, or Markdown file through the app's pipeline headlessly. The app has no HTTP server; this skill forwards the job into the already-running desktop instance via single-instance arg forwarding (`--enqueue`), so it processes in the live app with the user's configured providers and shows in History.
+description: Run a local document through Document Summarizer and retrieve the structured output. Use when an agent needs to process a PDF, PPTX, DOCX, TXT, or Markdown file through the app's Rust pipeline. Prefer the headless `summarizer-cli` binary when available; use the desktop `--enqueue` fallback when the user specifically wants the job in the live app queue and History.
 ---
 
 # Summarizer CLI
 
 ## Overview
 
-Document Summarizer is a standalone Tauri/Rust desktop app. It runs its pipeline
-in-process and exposes **no HTTP API**. To submit a job from an agent, this skill
-relaunches the app binary with `--enqueue <file>`; `tauri-plugin-single-instance`
-forwards the argument to the already-running instance, which drops the job into
-the live queue + History and processes it with the user's configured providers.
-The script then watches `~/.summarizer/history.json` for the job to finish and
-reads `~/.summarizer/jobs/<id>/output.json`.
+Document Summarizer is a standalone Tauri/Rust desktop app with a shared Rust
+pipeline. It exposes **no HTTP API**. For agents, this skill prefers the
+standalone `summarizer-cli` binary: one blocking invocation writes
+`<stem>_output.json` next to the input and prints a JSON manifest. If the CLI is
+not available, or if the user asks to watch the app, the skill can fall back to
+the desktop `--enqueue` path, which forwards the job into the live app queue and
+History.
 
-**Prerequisite: the desktop app must already be running.** Start it with
-`cd apps/desktop && npm run tauri:dev` (dev) or by opening the installed app.
+**Backend rule:** `--backend auto` is the default and uses CLI when found,
+otherwise the app enqueue path. `--backend cli` requires no app or display
+session. `--backend app` requires the desktop app to be open and is the only
+path that writes to app History.
 
 **This skill is interactive: always ask the user how to process the file
 (step 2) and wait for their answer before enqueuing.** Do not auto-pick a
@@ -24,11 +26,27 @@ favorite or default just because no options were mentioned.
 
 ## Workflow
 
-### 1. Confirm the app is running
+### 1. Pick a backend
 
-The job is forwarded to a live instance. If no instance is running, the enqueue
-command would try to start a fresh GUI, which fails in a headless shell. Ask the
-user to open the app first if unsure.
+Default to `--backend auto`. It resolves the headless `summarizer-cli` binary
+from `--cli-bin`, `SUMMARIZER_CLI_BIN`, the repo's `backend-rs/target`, or
+`PATH`; if not found, it falls back to the desktop app path.
+
+Use `--backend cli` when the app is closed, when running in botcky/launchd, or
+when the user wants the simple `{stem}_output.json` artifact. Use
+`--backend app` when the user wants the job visible in the app queue/History; in
+that mode the desktop app must already be running.
+
+Before the first processing run in a session, or after any provider/PDFium
+failure, run a preflight:
+
+```bash
+python3 scripts/run_job.py --doctor
+```
+
+Use `--doctor --favorite <name-or-number>` or add the same custom flags you plan
+to run so the check validates the merged effective config. Doctor never runs the
+pipeline and never writes an output file.
 
 ### 2. Choose how to process — ALWAYS ASK FIRST (blocking)
 
@@ -43,6 +61,20 @@ The ONLY time you may skip the menu is when the user, in their own message, has
 **already** named a favorite ("use vision-every-page") or given explicit
 processing instructions ("…and skip the tables"). In every other case — including
 a bare "process this" — you must ask.
+
+#### Automation callers (cron, CI, multi-agent — no user to ask)
+
+The gate counts as **pre-answered** only when:
+
+1. the user named a favorite or gave explicit processing instructions
+   in-message (the interactive rule above), or
+2. the invocation comes from an automated context whose configuration names the
+   favorite — the favorite in the automation config *is* the user's answer.
+   Pass it explicitly: `--favorite <name>`.
+
+A bare automated call with no favorite must **fail loudly, never default**.
+Automation wrappers should set `--require-favorite`, which makes `run_job.py`
+exit 2 (naming `--list-favorites`) when no `--favorite` was supplied.
 
 Read the list at runtime so user-added favorites show up:
 
@@ -65,6 +97,16 @@ Then present a numbered menu (Custom last) and ask the user to choose. For examp
 - **2 / a named favorite** → `python3 scripts/run_job.py --file <path> --favorite <name-or-number>`
   (a favorite's flags merge onto the desktop default; explicit flags you add still override)
 - **3 / "custom"** → run the guided Q&A below, assemble the flags, confirm, then run.
+
+For documents likely over 25 pages, offer a dry-run estimate before the user
+commits to a heavy option:
+
+```bash
+python3 scripts/run_job.py --file /path/to/document.pdf --estimate [same flags/favorite]
+```
+
+The estimate reports page/chunk count, stage plan, expected provider calls, and
+the effective config. It does not call model providers or write output.
 
 Favorites live in `favorites.json` at the skill root (`name`, `title`,
 `description`, `flags[]` of plain `run_job.py` flags). The user can add their
@@ -132,7 +174,15 @@ their choice — e.g. for the Default favorite:
 python3 scripts/run_job.py --file /path/to/document.pdf --favorite default
 ```
 
-The script:
+With the default CLI backend, the script:
+
+- resolves `summarizer-cli` (`--cli-bin`, `SUMMARIZER_CLI_BIN`, repo
+  `backend-rs/target/{release,debug}`, then `PATH`)
+- runs `summarizer-cli <file> --config-json <partial> --output <stem>_output.json --quiet`
+- waits for the blocking process to finish
+- prints the CLI manifest with `"backend": "cli"`
+
+With `--backend app`, the script:
 
 - resolves the app binary (`--app-bin`, then `SUMMARIZER_APP_BIN`, then the repo
   `target/{release,debug}`, then the macOS bundle)
@@ -144,14 +194,92 @@ The script:
 ### 4. Read the result
 
 The printed manifest includes `job_id`, `status`, `output_json_path`, the
-`document` metadata, and `page_count`. Read `output.json` for the full structured
-result (document + pages with text, tables, vision output, and summaries).
+`backend`, and usually the `document` metadata and `page_count`. Read
+results through `query_result.py` by default so only the needed fields enter
+context:
+
+```bash
+python3 scripts/query_result.py --input /path/to/<stem>_output.json --summary
+python3 scripts/query_result.py --input /path/to/<stem>_output.json --pages 12 --fields text,summary_notes,summary_topics
+python3 scripts/query_result.py --input /path/to/<stem>_output.json --topics
+python3 scripts/query_result.py --input /path/to/<stem>_output.json --grep "revenue"
+python3 scripts/query_result.py --input /path/to/<stem>_output.json --tables --as csv --out /tmp/tables
+```
+
+`query_result.py` strips `image_base64` and embedded image payloads unless
+`--include-images` is explicitly set. Read raw `output_json_path` only as an
+escape hatch when the compact selectors cannot answer the question. CLI jobs do
+**not** appear in the app's History; use `--backend app` for that.
+
+### 4a. Scale and background runs
+
+Use batch mode when the user asks for a folder or multiple files. The favorites
+gate is asked once for the whole batch:
+
+```bash
+python3 scripts/run_job.py --dir /path/to/docs --glob '*.pdf' --recursive --favorite default --parallel 2
+python3 scripts/run_job.py --files a.pdf b.docx c.md --favorite default
+```
+
+CLI runs are cataloged in `~/.summarizer/cli-runs.jsonl`. Repeating an unchanged
+file with the same effective config returns a cached manifest; use `--force` to
+rerun or `--no-cache` for throwaway runs. Inspect cataloged runs with:
+
+```bash
+python3 scripts/run_job.py --list-runs --limit 10
+python3 scripts/query_result.py --run latest --summary
+```
+
+Use detach when an estimate exceeds roughly 8 minutes or the user wants to keep
+working while a run continues:
+
+```bash
+python3 scripts/run_job.py --file long.pdf --favorite default --detach
+python3 scripts/run_job.py --status <run_id>
+python3 scripts/run_job.py --wait <run_id>
+python3 scripts/run_job.py --cancel <run_id>
+```
+
+### 4b. Page sampling and exports
+
+For expensive documents, run a sample first, inspect it, then ask before running
+the full document:
+
+```bash
+python3 scripts/run_job.py --file long.pdf --favorite default --sample 3
+python3 scripts/query_result.py --input long_output.json --summary
+```
+
+Use explicit `--pages '1-3,8,10'` when the user names page ranges. Export
+structured assets through `query_result.py`:
+
+```bash
+python3 scripts/query_result.py --input output.json --export tables --export pages-jsonl --out exports/
+python3 scripts/query_result.py --input output.json --include-images --export images --out exports/
+```
+
+### 4c. Corpus synthesis
+
+After processing multiple CLI runs, create a deterministic corpus brief:
+
+```bash
+python3 scripts/synthesize.py --latest 3 --out corpus-brief.md
+```
+
+`--llm` is optional and best-effort; the default brief uses only existing
+notes/topics/metadata and performs no model calls.
 
 ### 5. Failure handling
 
-- Enqueue command exits non-zero → the app is probably not running; ask the user to open it.
+- Headless CLI exits non-zero → inspect the manifest `error`; provider settings,
+  PDFium, or the selected provider may be unavailable.
+- Enqueue command exits non-zero → the app is probably not running; ask the user
+  to open it or rerun with `--backend cli`.
 - Job ends `failed` → inspect the manifest's `final_job.error`; the configured provider may be unreachable.
-- Wrong binary → pass `--app-bin /absolute/path` or set `SUMMARIZER_APP_BIN`.
+- Wrong binary → pass `--cli-bin` / `SUMMARIZER_CLI_BIN`, or for app mode
+  `--app-bin` / `SUMMARIZER_APP_BIN`.
+- Automation wrappers should pass `--require-favorite`; a bare automated call
+  without `--favorite` must fail loudly instead of choosing a default.
 
 ### 6. Convert a result to OKF (on request)
 
@@ -164,12 +292,12 @@ is a read-only transform; it does not re-process the document.
 Pick the source the same way the user refers to it:
 
 ```bash
-# Newest finished job (default when the user just processed something):
+# Newest finished app job (only app-History jobs; CLI outputs need --input):
 python3 scripts/to_okf.py --latest
 
 # A specific job, or an explicit output.json:
 python3 scripts/to_okf.py --job-id <job_id>
-python3 scripts/to_okf.py --input /path/to/output.json --out /path/to/dest
+python3 scripts/to_okf.py --input /path/to/<stem>_output.json --out /path/to/dest
 ```
 
 - **Default (`--granularity pages`)** emits a conformant **OKF directory bundle**:

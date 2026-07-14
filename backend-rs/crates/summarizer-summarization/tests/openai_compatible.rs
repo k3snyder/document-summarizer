@@ -219,6 +219,7 @@ case "$input" in
   *"topic categories"*) text='Codex topics, Testing' ;;
   *) text='* Codex note from document' ;;
 esac
+printf '%s\n' "{{\"type\":\"turn.started\",\"context\":{{\"model\":\"gpt-codex-test\"}}}}"
 printf '%s\n' "{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"$text\"}}}}"
 "#,
             capture.display()
@@ -246,6 +247,10 @@ printf '%s\n' "{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message
     assert_eq!(
         result.page.summary_topics,
         Some(vec!["Codex topics".to_string(), "Testing".to_string()])
+    );
+    assert_eq!(
+        summarizer.reported_model().as_deref(),
+        Some("gpt-codex-test")
     );
     let args = std::fs::read_to_string(capture).unwrap();
     assert!(args.contains("exec"));

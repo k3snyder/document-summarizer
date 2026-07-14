@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use summarizer_cli_util::{
     cli_command_context, configure_isolated_grok_command, create_isolated_grok_home,
-    parse_codex_jsonl, parse_grok_json, resolve_cli_executable, run_cli_command_with_retry,
+    parse_codex_jsonl_output, parse_grok_json, resolve_cli_executable, run_cli_command_with_retry,
     RetryPolicy,
 };
 use summarizer_types::PipelineError;
@@ -135,6 +135,10 @@ pub trait VisionProvider: Send + Sync {
 
     fn release_page(&self, _page: &VisionPage) -> Result<(), PipelineError> {
         Ok(())
+    }
+
+    fn reported_model(&self) -> Option<String> {
+        None
     }
 }
 
@@ -372,6 +376,7 @@ pub struct CliVisionProvider {
     timeout_seconds: u64,
     retries: u32,
     kind: CliProviderKind,
+    reported_model: Arc<Mutex<Option<String>>>,
 }
 
 impl CliVisionProvider {
@@ -382,6 +387,7 @@ impl CliVisionProvider {
             timeout_seconds: 600,
             retries: 3,
             kind: CliProviderKind::Generic,
+            reported_model: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -392,6 +398,7 @@ impl CliVisionProvider {
             timeout_seconds: 600,
             retries: 3,
             kind: CliProviderKind::Codex,
+            reported_model: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -402,6 +409,7 @@ impl CliVisionProvider {
             timeout_seconds: 600,
             retries: 3,
             kind: CliProviderKind::Grok,
+            reported_model: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -412,6 +420,7 @@ impl CliVisionProvider {
             timeout_seconds: 600,
             retries: 3,
             kind: CliProviderKind::Copilot,
+            reported_model: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -551,15 +560,20 @@ impl CliVisionProvider {
         )
         .await
         .map_err(PipelineError::Vision)?;
-        let content = parse_codex_jsonl(&output.stdout);
-        if content.trim().is_empty() {
+        let parsed = parse_codex_jsonl_output(&output.stdout);
+        if let Some(model) = parsed.model {
+            if let Ok(mut reported_model) = self.reported_model.lock() {
+                *reported_model = Some(model);
+            }
+        }
+        if parsed.content.trim().is_empty() {
             return Err(PipelineError::Vision(format!(
                 "Codex CLI returned no assistant message; {context}; stdout={}; stderr={}",
                 output.stdout.trim(),
                 output.stderr.trim()
             )));
         }
-        Ok(content)
+        Ok(parsed.content)
     }
 
     async fn execute_grok_image(
@@ -774,6 +788,10 @@ impl VisionProvider for CliVisionProvider {
                 Some(content)
             },
         })
+    }
+
+    fn reported_model(&self) -> Option<String> {
+        self.reported_model.lock().ok()?.clone()
     }
 }
 

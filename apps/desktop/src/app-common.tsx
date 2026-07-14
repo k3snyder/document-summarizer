@@ -194,6 +194,11 @@ export function NavButton({
   );
 }
 
+export interface SelectOption {
+  value: string;
+  label: string;
+}
+
 export function SelectField({
   label,
   value,
@@ -202,7 +207,7 @@ export function SelectField({
 }: {
   label: string;
   value: string;
-  options: string[];
+  options: ReadonlyArray<string | SelectOption>;
   onChange: (value: string) => void;
 }) {
   return (
@@ -212,11 +217,16 @@ export function SelectField({
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
       >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {labelize(option)}
-          </option>
-        ))}
+        {options.map((option) => {
+          const optionValue = typeof option === "string" ? option : option.value;
+          const optionLabel =
+            typeof option === "string" ? labelize(option) : option.label;
+          return (
+            <option key={optionValue} value={optionValue}>
+              {optionLabel}
+            </option>
+          );
+        })}
       </select>
     </label>
   );

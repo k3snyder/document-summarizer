@@ -7,12 +7,15 @@ use std::{
     io::{Cursor, Write},
     sync::{Arc, Mutex},
 };
-use summarizer_pipeline::{Pipeline, PipelineProgressStage};
+use summarizer_pipeline::{Pipeline, PipelineProgressStage, PipelineProviderConfig};
 use summarizer_types::{
     CliProvider, PipelineConfig, SummarizerMode, SummarizerProvider, VisionMode,
 };
 use wiremock::matchers::{body_string_contains, method, path as request_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -117,6 +120,10 @@ async fn pipeline_runs_openai_compatible_summarization_and_records_metrics() {
         metrics.config.summarizer_provider.as_deref(),
         Some("openai")
     );
+    assert_eq!(
+        metrics.config.summarizer_model.as_deref(),
+        Some("summary-model")
+    );
     assert_eq!(metrics.stages.summarization.tokens, 25);
     assert!(metrics.stages.extraction.tokens > 0);
     assert_eq!(metrics.stages.summarization.total_attempts, Some(1));
@@ -146,6 +153,57 @@ async fn pipeline_records_empty_vision_stage_when_no_pages_have_images() {
     let metrics = output.metrics.unwrap();
     assert_eq!(metrics.stages.vision.pages_with_images, Some(0));
     assert_eq!(metrics.stages.vision.extracted_count, None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pipeline_prefers_codex_reported_model_over_configured_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("fake-codex");
+    std::fs::write(
+        &script_path,
+        r#"#!/bin/sh
+input=$(cat)
+case "$input" in
+  *"Compare the following original text"*) text='92%' ;;
+  *"topic categories"*) text='Testing' ;;
+  *) text='* Codex note' ;;
+esac
+printf '%s\n' '{"type":"turn.started","context":{"model":"gpt-codex-actual"}}'
+printf '%s\n' "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"$text\"}}"
+"#,
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script_path, permissions).unwrap();
+
+    let path = dir.path().join("fixture.txt");
+    tokio::fs::write(&path, "First line\nSecond line")
+        .await
+        .unwrap();
+    let mut provider_config = PipelineProviderConfig::from_env();
+    provider_config.codex.executable = script_path.to_string_lossy().to_string();
+    provider_config.codex.model = Some("gpt-codex-configured".to_string());
+    provider_config.codex.args = vec!["--model".to_string(), "gpt-codex-configured".to_string()];
+    provider_config.codex.timeout_seconds = 5;
+
+    let output = Pipeline::with_provider_config(provider_config)
+        .run_path(
+            "job_codex_model",
+            &path,
+            &PipelineConfig {
+                summarizer_provider: SummarizerProvider::Codex,
+                ..PipelineConfig::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        output.metrics.unwrap().config.summarizer_model.as_deref(),
+        Some("gpt-codex-actual")
+    );
 }
 
 #[tokio::test]
@@ -237,6 +295,7 @@ async fn pipeline_runs_docx_embedded_image_vision_when_classification_is_skipped
         metrics.config.vision_extractor_provider.as_deref(),
         Some("openai")
     );
+    assert_eq!(metrics.config.vision_model.as_deref(), Some("vision-model"));
     assert_eq!(metrics.config.vision_classifier_provider, None);
 }
 

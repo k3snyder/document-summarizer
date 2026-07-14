@@ -6,7 +6,7 @@ Current pipeline config shape. Canonical source of truth:
 Every field is optional — each has `#[serde(default)]`, so a partial config
 object is valid.
 
-How the base is chosen (headless `--enqueue` path):
+How the base is chosen (headless CLI and desktop `--enqueue` paths):
 - **Omit `--config-json` entirely** → the desktop app uses its own default,
   `desktop_default_pipeline_config()` (vision **and** summarizer = `codex`), plus
   the user's saved provider settings. This is "process as normal with full
@@ -34,8 +34,9 @@ partial override merges onto `desktop_default_pipeline_config()` (codex/codex),
   "skip_images": false,
   "skip_pptx_tables": false,
   "text_only": false,
+  "page_range": null,
   "pdf_image_dpi": 200,
-  "vision_mode": "none",
+    "vision_mode": "none",
   "vision_classifier_mode": null,
   "vision_extractor_mode": null,
   "vision_cli_provider": null,
@@ -75,14 +76,15 @@ preferred way to override; `--config-json` is the escape hatch.
 - `skip_images`
 - `skip_pptx_tables`
 - `text_only`
+- `page_range`: optional 1-based inclusive range string, e.g. `"1-3,8,10"`
 - `pdf_image_dpi`: `72 | 144 | 200 | 300` (accepts the number `200` or the string `"200"`)
 
 ### Vision
 
-- `vision_mode`: `none | deepseek | gemini | openai | ollama | llama_cpp | codex | claude | grok`
+- `vision_mode`: `none | deepseek | gemini | openai | ollama | llama_cpp | codex | claude | grok | copilot`
 - `vision_classifier_mode`: optional override, same `VisionMode` choices
 - `vision_extractor_mode`: optional override, same `VisionMode` choices
-- `vision_cli_provider`: `codex | claude | grok`, optional
+- `vision_cli_provider`: `codex | claude | grok | copilot`, optional
 - `vision_skip_classification`: skip the classify step and extract every page
 
 > Note: Gemini is supported by the Rust vision crate but blocked in the desktop
@@ -93,8 +95,8 @@ preferred way to override; `--config-json` is the escape hatch.
 
 - `run_summarization`
 - `summarizer_mode`: `full | topics-only | skip` (kebab-case on the wire)
-- `summarizer_provider`: `ollama | llama_cpp | openai | codex | claude | grok`
-- `summarizer_cli_provider`: `codex | claude | grok`, optional
+- `summarizer_provider`: `ollama | llama_cpp | openai | codex | claude | grok | copilot`
+- `summarizer_cli_provider`: `codex | claude | grok | copilot`, optional
 - `summarizer_detailed_extraction`: run extraction 3x and synthesize
 - `summarizer_insight_mode`: extra insight pass (only active with `summarizer_mode=full`)
 - `max_tokens_per_page`: per-page summarization token budget (default 100000)
@@ -107,8 +109,11 @@ preferred way to override; `--config-json` is the escape hatch.
 ## Provider notes
 
 - Primary local provider is **llama.cpp** (used for both vision and summarization); **Ollama** is the fallback local provider.
-- `openai`, `codex`, `claude`, and `grok` are also available; CLI providers (`codex`/`claude`/`grok`) require the matching CLI to be installed and on PATH for the desktop app process.
+- `openai`, `codex`, `claude`, `grok`, and `copilot` are also available; CLI providers (`codex`/`claude`/`grok`/`copilot`) require the matching CLI to be installed and on PATH for the desktop app process.
 - Vision and summarization require a reachable model endpoint/CLI. If none is configured, use `extract_only` for a pure-extraction run.
+- `summarizer-cli --doctor` validates the providers used by the effective config.
+  OpenAI/Gemini checks verify key presence by default; llama.cpp/Ollama checks
+  probe `/models`; CLI providers run `<executable> --version`.
 
 ## Common recipes
 

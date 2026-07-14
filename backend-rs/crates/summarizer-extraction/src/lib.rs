@@ -2,7 +2,7 @@ use base64::{engine::general_purpose, Engine as _};
 use image::ImageFormat;
 use pdfium_render::prelude::{PdfRenderConfig, Pdfium};
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fs::{self, File},
     io::{Cursor, Read},
     ops::Deref,
@@ -12,7 +12,8 @@ use std::{
 };
 use summarizer_cli_util::{resolve_soffice, suppress_command_window};
 use summarizer_types::{
-    DocumentMetadata, DocumentOutput, PageOutput, PipelineConfig, PipelineError, VisionMode,
+    parse_page_range, DocumentMetadata, DocumentOutput, PageOutput, PipelineConfig, PipelineError,
+    VisionMode,
 };
 use url::Url;
 use zip::ZipArchive;
@@ -240,6 +241,13 @@ pub struct ExtractionProgress {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentProbe {
+    pub pages: usize,
+    pub per_page_chars: Vec<usize>,
+    pub per_page_tables: Vec<usize>,
+}
+
 pub type ExtractionProgressCallback = Arc<dyn Fn(ExtractionProgress) + Send + Sync>;
 
 impl Extractor {
@@ -281,7 +289,7 @@ impl Extractor {
                     &text,
                     config,
                     progress.as_ref(),
-                ))
+                )?)
             }
             DocumentKind::Pdf => {
                 let config = config.clone();
@@ -320,19 +328,92 @@ impl Extractor {
                 let path = path.to_path_buf();
                 let progress = Arc::clone(&progress);
                 tokio::task::spawn_blocking(move || {
-                    docx::extract_docx_document_with_progress(
+                    let output = docx::extract_docx_document_with_progress(
                         document_id,
                         filename,
                         &path,
                         &config,
                         progress.as_ref(),
-                    )
+                    )?;
+                    filter_output_page_range(output, &config)
                 })
                 .await
                 .map_err(|err| PipelineError::Extraction(err.to_string()))?
             }
         }
     }
+}
+
+pub fn probe_path(path: &Path, config: &PipelineConfig) -> Result<DocumentProbe, PipelineError> {
+    match DocumentKind::from_path(path)? {
+        DocumentKind::Pdf => probe_pdf_document(path, config),
+        DocumentKind::Pptx => probe_pptx_document(path, config),
+        DocumentKind::Docx => probe_docx_document(path, config),
+        DocumentKind::Text | DocumentKind::Markdown => {
+            let text = fs::read_to_string(path)
+                .map_err(|err| PipelineError::Extraction(err.to_string()))?;
+            probe_text_document(&text, config)
+        }
+    }
+}
+
+fn selected_pages(
+    total_pages: usize,
+    config: &PipelineConfig,
+) -> Result<Option<BTreeSet<usize>>, PipelineError> {
+    let Some(spec) = config
+        .page_range
+        .as_deref()
+        .filter(|spec| !spec.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let parsed = parse_page_range(spec)
+        .map_err(|err| PipelineError::Extraction(format!("Invalid page_range '{spec}': {err}")))?;
+    let selected = parsed
+        .into_iter()
+        .filter(|page| *page <= total_pages)
+        .collect::<BTreeSet<_>>();
+    if selected.is_empty() {
+        return Err(PipelineError::Extraction(format!(
+            "page_range '{spec}' does not overlap the document's {total_pages} pages"
+        )));
+    }
+    Ok(Some(selected))
+}
+
+fn page_range_warning(
+    total_pages: usize,
+    config: &PipelineConfig,
+    selected: &Option<BTreeSet<usize>>,
+) -> Option<String> {
+    let spec = config.page_range.as_deref()?;
+    let parsed = parse_page_range(spec).ok()?;
+    let clipped = parsed.iter().any(|page| *page > total_pages);
+    (clipped && selected.is_some())
+        .then(|| format!("page_range '{spec}' was clipped to the document's {total_pages} pages"))
+}
+
+fn filter_output_page_range(
+    mut output: DocumentOutput,
+    config: &PipelineConfig,
+) -> Result<DocumentOutput, PipelineError> {
+    let total_pages = output.document.total_pages;
+    let selected = selected_pages(total_pages, config)?;
+    let clipped_warning = page_range_warning(total_pages, config, &selected);
+    let Some(selected) = selected else {
+        return Ok(output);
+    };
+    output.pages.retain(|page| {
+        page.page_number
+            .is_some_and(|page_number| selected.contains(&page_number))
+    });
+    if let Some(warning) = clipped_warning {
+        if let Some(first) = output.pages.first_mut() {
+            first.extraction_warnings.push(warning);
+        }
+    }
+    Ok(output)
 }
 
 pub fn extract_pdf_document(
@@ -357,10 +438,19 @@ fn extract_pdf_document_with_progress(
         .load_pdf_from_file(path, None)
         .map_err(|err| PipelineError::Extraction(format!("Could not open PDF: {err}")))?;
     let total_pages = document.pages().len() as usize;
-    let mut pages = Vec::with_capacity(total_pages);
+    let selected = selected_pages(total_pages, config)?;
+    let clipped_warning = page_range_warning(total_pages, config, &selected);
+    let mut pages = Vec::with_capacity(selected.as_ref().map_or(total_pages, BTreeSet::len));
+    let mut warning_emitted = false;
 
     for (index, page) in document.pages().iter().enumerate() {
         let page_number = index + 1;
+        if selected
+            .as_ref()
+            .is_some_and(|selected| !selected.contains(&page_number))
+        {
+            continue;
+        }
         emit_extraction_progress(
             progress,
             page_number,
@@ -369,7 +459,13 @@ fn extract_pdf_document_with_progress(
             format!("Extracting page {page_number} of {total_pages}."),
         );
         let (text, text_warning) = extract_text_from_pdf_page(&page);
-        let extraction_warnings = text_warning.into_iter().collect::<Vec<_>>();
+        let mut extraction_warnings = text_warning.into_iter().collect::<Vec<_>>();
+        if !warning_emitted {
+            if let Some(warning) = clipped_warning.clone() {
+                extraction_warnings.push(warning);
+                warning_emitted = true;
+            }
+        }
         let tables = if config.skip_tables || config.text_only {
             Vec::new()
         } else {
@@ -577,6 +673,44 @@ fn flush_table(tables: &mut Vec<Vec<Vec<String>>>, current: &mut Vec<Vec<String>
     }
 }
 
+fn probe_pdf_document(
+    path: &Path,
+    config: &PipelineConfig,
+) -> Result<DocumentProbe, PipelineError> {
+    let pdfium = lock_pdfium()?;
+    let document = pdfium
+        .load_pdf_from_file(path, None)
+        .map_err(|err| PipelineError::Extraction(format!("Could not open PDF: {err}")))?;
+    let total_pages = document.pages().len() as usize;
+    let selected = selected_pages(total_pages, config)?;
+    let capacity = selected.as_ref().map_or(total_pages, BTreeSet::len);
+    let mut per_page_chars = Vec::with_capacity(capacity);
+    let mut per_page_tables = Vec::with_capacity(capacity);
+
+    for (index, page) in document.pages().iter().enumerate() {
+        let page_number = index + 1;
+        if selected
+            .as_ref()
+            .is_some_and(|selected| !selected.contains(&page_number))
+        {
+            continue;
+        }
+        let (text, _) = extract_text_from_pdf_page(&page);
+        per_page_chars.push(text.chars().count());
+        per_page_tables.push(if config.skip_tables || config.text_only {
+            0
+        } else {
+            extract_tables_from_text(&text).len()
+        });
+    }
+
+    Ok(DocumentProbe {
+        pages: per_page_chars.len(),
+        per_page_chars,
+        per_page_tables,
+    })
+}
+
 fn render_page_png_base64(
     page: &pdfium_render::prelude::PdfPage<'_>,
     dpi: u16,
@@ -597,7 +731,11 @@ fn render_page_png_base64(
     Ok(general_purpose::STANDARD.encode(bytes.into_inner()))
 }
 
-fn render_pdf_pages_png_base64(path: &Path, dpi: u16) -> Result<Vec<String>, PipelineError> {
+fn render_pdf_pages_png_base64(
+    path: &Path,
+    dpi: u16,
+    selected: Option<&BTreeSet<usize>>,
+) -> Result<Vec<Option<String>>, PipelineError> {
     let pdfium = lock_pdfium()?;
     let document = pdfium
         .load_pdf_from_file(path, None)
@@ -605,7 +743,15 @@ fn render_pdf_pages_png_base64(path: &Path, dpi: u16) -> Result<Vec<String>, Pip
     document
         .pages()
         .iter()
-        .map(|page| render_page_png_base64(&page, dpi))
+        .enumerate()
+        .map(|(index, page)| {
+            let page_number = index + 1;
+            if selected.is_some_and(|selected| !selected.contains(&page_number)) {
+                Ok(None)
+            } else {
+                render_page_png_base64(&page, dpi).map(Some)
+            }
+        })
         .collect()
 }
 
@@ -654,7 +800,10 @@ fn extract_pptx_document_with_progress(
     let mut archive = SizeLimitedZipArchive::new(file, "PPTX")?;
     let slide_paths = pptx_slide_paths(&mut archive)?;
     let total_pages = slide_paths.len();
-    let mut pages = Vec::with_capacity(total_pages);
+    let selected = selected_pages(total_pages, config)?;
+    let clipped_warning = page_range_warning(total_pages, config, &selected);
+    let mut pages = Vec::with_capacity(selected.as_ref().map_or(total_pages, BTreeSet::len));
+    let mut warning_emitted = false;
 
     let skip_notes = config.skip_tables || config.text_only;
     let skip_slide_tables = config.skip_pptx_tables || config.text_only;
@@ -663,6 +812,7 @@ fn extract_pptx_document_with_progress(
             path,
             total_pages,
             config.pdf_image_dpi.as_u16(),
+            selected.as_ref(),
         )?)
     } else {
         None
@@ -670,6 +820,12 @@ fn extract_pptx_document_with_progress(
 
     for (index, slide_path) in slide_paths.iter().enumerate() {
         let page_number = index + 1;
+        if selected
+            .as_ref()
+            .is_some_and(|selected| !selected.contains(&page_number))
+        {
+            continue;
+        }
         emit_extraction_progress(
             progress,
             page_number,
@@ -683,10 +839,17 @@ fn extract_pptx_document_with_progress(
         let image_base64 = if config.skip_images || config.text_only {
             None
         } else if let Some(images) = rendered_slide_images.as_ref() {
-            images.get(index).cloned()
+            images.get(index).cloned().flatten()
         } else {
             extract_pptx_slide_image_base64(&mut archive, slide_path, &slide_xml)?
         };
+        let mut extraction_warnings = Vec::new();
+        if !warning_emitted {
+            if let Some(warning) = clipped_warning.clone() {
+                extraction_warnings.push(warning);
+                warning_emitted = true;
+            }
+        }
 
         if !skip_notes {
             if let Some(notes_path) = pptx_notes_path(&mut archive, slide_path)? {
@@ -707,7 +870,7 @@ fn extract_pptx_document_with_progress(
             page_number: Some(page_number),
             text: text_parts.join("\n"),
             tables,
-            extraction_warnings: Vec::new(),
+            extraction_warnings,
             html: None,
             embedded_images: Vec::new(),
             image_base64,
@@ -748,6 +911,41 @@ fn extract_pptx_document_with_progress(
         },
         pages,
         metrics: None,
+    })
+}
+
+fn probe_pptx_document(
+    path: &Path,
+    config: &PipelineConfig,
+) -> Result<DocumentProbe, PipelineError> {
+    let file = File::open(path)
+        .map_err(|err| PipelineError::Extraction(format!("Could not open PPTX: {err}")))?;
+    let mut archive = SizeLimitedZipArchive::new(file, "PPTX")?;
+    let slide_paths = pptx_slide_paths(&mut archive)?;
+    let selected = selected_pages(slide_paths.len(), config)?;
+    let capacity = selected.as_ref().map_or(slide_paths.len(), BTreeSet::len);
+    let mut per_page_chars = Vec::with_capacity(capacity);
+    let mut per_page_tables = Vec::with_capacity(capacity);
+    let skip_slide_tables = config.skip_pptx_tables || config.text_only || config.skip_tables;
+
+    for (index, slide_path) in slide_paths.iter().enumerate() {
+        let page_number = index + 1;
+        if selected
+            .as_ref()
+            .is_some_and(|selected| !selected.contains(&page_number))
+        {
+            continue;
+        }
+        let slide_xml = read_zip_string(&mut archive, slide_path)?;
+        let (text_parts, tables) = extract_pptx_slide_xml(&slide_xml, skip_slide_tables)?;
+        per_page_chars.push(text_parts.join("\n").chars().count());
+        per_page_tables.push(tables.len());
+    }
+
+    Ok(DocumentProbe {
+        pages: per_page_chars.len(),
+        per_page_chars,
+        per_page_tables,
     })
 }
 
@@ -876,7 +1074,8 @@ fn render_pptx_slide_screenshots_base64(
     path: &Path,
     expected_slides: usize,
     dpi: u16,
-) -> Result<Vec<String>, PipelineError> {
+    selected: Option<&BTreeSet<usize>>,
+) -> Result<Vec<Option<String>>, PipelineError> {
     let soffice = soffice_path().ok_or_else(|| {
         PipelineError::Extraction(
             "Could not render PPTX slide screenshots for vision: LibreOffice/soffice was not found. Install LibreOffice or enable Skip Slide Screenshots.".to_string(),
@@ -935,7 +1134,7 @@ fn render_pptx_slide_screenshots_base64(
             String::from_utf8_lossy(&output.stderr).trim()
         ))
     })?;
-    let rendered_pages = render_pdf_pages_png_base64(&pdf_path, dpi)?;
+    let rendered_pages = render_pdf_pages_png_base64(&pdf_path, dpi, selected)?;
     if rendered_pages.len() != expected_slides {
         return Err(PipelineError::Extraction(format!(
             "LibreOffice rendered {} PPTX slide images, expected {expected_slides}",
@@ -1123,6 +1322,7 @@ pub fn extract_text_document(
 ) -> DocumentOutput {
     let progress = noop_extraction_progress();
     extract_text_document_with_progress(document_id, filename, text, config, progress.as_ref())
+        .expect("text extraction config should be valid")
 }
 
 fn extract_text_document_with_progress(
@@ -1131,7 +1331,7 @@ fn extract_text_document_with_progress(
     text: &str,
     config: &PipelineConfig,
     progress: &(dyn Fn(ExtractionProgress) + Send + Sync),
-) -> DocumentOutput {
+) -> Result<DocumentOutput, PipelineError> {
     let chunks = split_recursive(text, config.chunk_size, config.chunk_overlap);
     let chunks = if chunks.is_empty() {
         vec![String::new()]
@@ -1140,9 +1340,18 @@ fn extract_text_document_with_progress(
     };
 
     let total_pages = chunks.len();
-    let mut pages = Vec::with_capacity(total_pages);
+    let selected = selected_pages(total_pages, config)?;
+    let clipped_warning = page_range_warning(total_pages, config, &selected);
+    let mut pages = Vec::with_capacity(selected.as_ref().map_or(total_pages, BTreeSet::len));
+    let mut warning_emitted = false;
     for (index, text) in chunks.into_iter().enumerate() {
         let page_number = index + 1;
+        if selected
+            .as_ref()
+            .is_some_and(|selected| !selected.contains(&page_number))
+        {
+            continue;
+        }
         emit_extraction_progress(
             progress,
             page_number,
@@ -1150,13 +1359,20 @@ fn extract_text_document_with_progress(
             index,
             format!("Preparing chunk {page_number} of {total_pages}."),
         );
+        let mut extraction_warnings = Vec::new();
+        if !warning_emitted {
+            if let Some(warning) = clipped_warning.clone() {
+                extraction_warnings.push(warning);
+                warning_emitted = true;
+            }
+        }
         pages.push(PageOutput {
             chunk_id: format!("chunk_{}", index + 1),
             doc_title: filename.clone(),
             page_number: Some(index + 1),
             text,
             tables: Vec::new(),
-            extraction_warnings: Vec::new(),
+            extraction_warnings,
             html: None,
             embedded_images: Vec::new(),
             image_base64: None,
@@ -1183,7 +1399,7 @@ fn extract_text_document_with_progress(
         );
     }
 
-    DocumentOutput {
+    Ok(DocumentOutput {
         document: DocumentMetadata {
             document_id,
             filename,
@@ -1192,7 +1408,66 @@ fn extract_text_document_with_progress(
         },
         pages,
         metrics: None,
-    }
+    })
+}
+
+fn probe_docx_document(
+    path: &Path,
+    config: &PipelineConfig,
+) -> Result<DocumentProbe, PipelineError> {
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("document")
+        .to_string();
+    let mut probe_config = config.clone();
+    probe_config.skip_images = true;
+    let output = docx::extract_docx_document_with_progress(
+        "probe".to_string(),
+        filename,
+        path,
+        &probe_config,
+        noop_extraction_progress().as_ref(),
+    )?;
+    let output = filter_output_page_range(output, config)?;
+    Ok(DocumentProbe {
+        pages: output.pages.len(),
+        per_page_chars: output
+            .pages
+            .iter()
+            .map(|page| page.text.chars().count())
+            .collect(),
+        per_page_tables: output.pages.iter().map(|page| page.tables.len()).collect(),
+    })
+}
+
+fn probe_text_document(
+    text: &str,
+    config: &PipelineConfig,
+) -> Result<DocumentProbe, PipelineError> {
+    let chunks = split_recursive(text, config.chunk_size, config.chunk_overlap);
+    let chunks = if chunks.is_empty() {
+        vec![String::new()]
+    } else {
+        chunks
+    };
+    let total_pages = chunks.len();
+    let selected = selected_pages(total_pages, config)?;
+    let filtered = chunks
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            selected
+                .as_ref()
+                .is_none_or(|selected| selected.contains(&(index + 1)))
+        })
+        .map(|(_, chunk)| chunk)
+        .collect::<Vec<_>>();
+    Ok(DocumentProbe {
+        pages: filtered.len(),
+        per_page_chars: filtered.iter().map(|chunk| chunk.chars().count()).collect(),
+        per_page_tables: vec![0; filtered.len()],
+    })
 }
 
 fn noop_extraction_progress() -> ExtractionProgressCallback {

@@ -11,6 +11,7 @@ import {
   TextField,
 } from "./app-common";
 import {
+  CODEX_MODEL_OPTIONS,
   DEFAULT_LOGGING_SETTINGS,
   DEFAULT_PROVIDER_VISIBILITY,
   DEFAULT_UPDATE_SETTINGS,
@@ -102,6 +103,20 @@ export function SettingsView({
       },
     }));
   }
+
+  const codexModelOptions = React.useMemo(() => {
+    const currentModel = draft.providers.codex.model;
+    if (
+      currentModel &&
+      !CODEX_MODEL_OPTIONS.some((option) => option.value === currentModel)
+    ) {
+      return [
+        { value: currentModel, label: `${currentModel} (custom)` },
+        ...CODEX_MODEL_OPTIONS,
+      ];
+    }
+    return CODEX_MODEL_OPTIONS;
+  }, [draft.providers.codex.model]);
 
   function updateUpdates<K extends keyof DesktopSettings["updates"]>(
     field: K,
@@ -476,6 +491,12 @@ export function SettingsView({
           label="Codex args"
           value={draft.providers.codex.args}
           onChange={(value) => updateProvider("codex", "args", value)}
+        />
+        <SelectField
+          label="Codex model"
+          value={draft.providers.codex.model}
+          options={codexModelOptions}
+          onChange={(value) => updateProvider("codex", "model", value)}
         />
         <SelectField
           label="Codex reasoning effort"

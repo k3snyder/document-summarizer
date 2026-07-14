@@ -212,7 +212,9 @@ export interface PipelineMetrics {
     vision_mode: string | null;
     vision_classifier_provider?: string | null;
     vision_extractor_provider?: string | null;
+    vision_model?: string | null;
     summarizer_provider: string | null;
+    summarizer_model?: string | null;
     summarizer_mode: string | null;
   };
 }
@@ -295,6 +297,7 @@ export interface OllamaSettings {
 export interface CliSettings {
   executable: string;
   args: string;
+  model: string;
   reasoning_effort: ReasoningEffort;
   timeout_seconds: number;
 }

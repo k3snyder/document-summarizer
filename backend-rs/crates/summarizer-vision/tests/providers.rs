@@ -229,6 +229,7 @@ async fn codex_cli_provider_uses_exec_json_and_image_file() {
             r#"#!/bin/sh
 printf '%s\n' "$@" > "{}"
 while IFS= read -r _line; do :; done
+printf '%s\n' '{{"type":"turn.started","context":{{"model":"gpt-codex-vision-test"}}}}'
 printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":"Codex visual description"}}}}'
 "#,
             capture.display()
@@ -247,6 +248,10 @@ printf '%s\n' '{{"type":"item.completed","item":{{"type":"agent_message","text":
     assert_eq!(
         provider.extract(&page).await.unwrap().image_text.as_deref(),
         Some("Codex visual description")
+    );
+    assert_eq!(
+        provider.reported_model().as_deref(),
+        Some("gpt-codex-vision-test")
     );
 
     let args = std::fs::read_to_string(capture).unwrap();

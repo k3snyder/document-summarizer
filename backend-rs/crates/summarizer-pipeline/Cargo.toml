@@ -1,6 +1,6 @@
 [package]
 name = "summarizer-pipeline"
-version = "0.3.0"
+version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,7 @@ rust-version.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+summarizer-cli-util = { path = "../summarizer-cli-util" }
 summarizer-extraction = { path = "../summarizer-extraction" }
 summarizer-summarization = { path = "../summarizer-summarization" }
 summarizer-types = { path = "../summarizer-types" }

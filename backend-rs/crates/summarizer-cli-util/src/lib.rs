@@ -615,12 +615,22 @@ pub fn unavailable_output(reason: &str) -> String {
     format!("stdout=<unavailable: {reason}>; stderr=<unavailable: {reason}>")
 }
 
-pub fn parse_codex_jsonl(stdout: &str) -> String {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexJsonlOutput {
+    pub content: String,
+    pub model: Option<String>,
+}
+
+pub fn parse_codex_jsonl_output(stdout: &str) -> CodexJsonlOutput {
     let mut content = Vec::new();
+    let mut model = None;
     for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
         let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
+        if let Some(event_model) = find_codex_event_model(&event) {
+            model = Some(event_model.to_string());
+        }
         if event["type"] == "item.completed" {
             let item = &event["item"];
             if item["type"] == "agent_message" {
@@ -647,10 +657,28 @@ pub fn parse_codex_jsonl(stdout: &str) -> String {
             }
         }
     }
-    if content.is_empty() {
+    let content = if content.is_empty() {
         stdout.trim().to_string()
     } else {
         content.join("\n").trim().to_string()
+    };
+    CodexJsonlOutput { content, model }
+}
+
+pub fn parse_codex_jsonl(stdout: &str) -> String {
+    parse_codex_jsonl_output(stdout).content
+}
+
+fn find_codex_event_model(value: &serde_json::Value) -> Option<&str> {
+    match value {
+        serde_json::Value::Object(fields) => fields
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .or_else(|| fields.values().find_map(find_codex_event_model)),
+        serde_json::Value::Array(items) => items.iter().find_map(find_codex_event_model),
+        _ => None,
     }
 }
 
@@ -676,8 +704,8 @@ fn write_error_suffix(result: &std::io::Result<()>) -> String {
 mod tests {
     use super::{
         cli_command_context, configure_isolated_grok_command, copy_grok_auth, parse_codex_jsonl,
-        parse_grok_json, resolve_cli_executable_with_extra_dirs, run_cli_command,
-        run_cli_command_with_retry, RetryPolicy, ISOLATED_GROK_CONFIG,
+        parse_codex_jsonl_output, parse_grok_json, resolve_cli_executable_with_extra_dirs,
+        run_cli_command, run_cli_command_with_retry, RetryPolicy, ISOLATED_GROK_CONFIG,
     };
     use std::collections::HashMap;
     #[cfg(unix)]
@@ -692,6 +720,23 @@ mod tests {
     fn parses_codex_jsonl_assistant_messages() {
         let stdout = r#"{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}"#;
         assert_eq!(parse_codex_jsonl(stdout), "hello");
+    }
+
+    #[test]
+    fn parses_codex_jsonl_reported_model_from_event_context() {
+        let stdout = concat!(
+            "{\"type\":\"thread.started\",\"thread\":{\"model\":\"gpt-5.6-sol\"}}\n",
+            "{\"type\":\"turn.started\",\"context\":{\"model\":\"gpt-5.6-terra\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"hello\"}}"
+        );
+
+        assert_eq!(
+            parse_codex_jsonl_output(stdout),
+            super::CodexJsonlOutput {
+                content: "hello".to_string(),
+                model: Some("gpt-5.6-terra".to_string()),
+            }
+        );
     }
 
     #[test]

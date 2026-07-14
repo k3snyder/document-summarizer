@@ -13,6 +13,7 @@ import {
   notesText,
 } from "./app-core";
 import { DesktopJob, DocumentOutput, PageOutput } from "./types";
+import { formatMetricModel } from "./metric-model";
 
 export function OutputViewer({
   job,
@@ -116,6 +117,7 @@ function MetricsView({ output }: { output: DocumentOutput }) {
           <div className="metric-card">
             <span>Vision provider</span>
             <strong>{formatMetricProvider(visionProvider)}</strong>
+            <small>{formatMetricModel(metrics.config.vision_model)}</small>
             {classifierProvider && classifierProvider !== visionProvider && (
               <small>
                 Classifier: {formatMetricProvider(classifierProvider)}
@@ -127,6 +129,7 @@ function MetricsView({ output }: { output: DocumentOutput }) {
             <strong>
               {formatMetricProvider(metrics.config.summarizer_provider)}
             </strong>
+            <small>{formatMetricModel(metrics.config.summarizer_model)}</small>
           </div>
           {Object.entries(metrics.stages).map(([stage, data]) => (
             <div className="metric-card" key={stage}>

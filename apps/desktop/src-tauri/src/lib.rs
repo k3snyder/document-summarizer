@@ -13,9 +13,9 @@ use summarizer_cli_util::{
     suppress_command_window,
 };
 use summarizer_pipeline::{
-    configure_pdfium_library_path, CliRuntimeConfig, GeminiProviderConfig, HttpProviderConfig,
-    LlamaCppProviderConfig, OllamaProviderConfig, Pipeline, PipelineProgress,
-    PipelineProviderConfig,
+    configure_pdfium_library_path,
+    settings::{default_cli_extra_dirs, provider_config_from_settings, ProviderSettings},
+    Pipeline, PipelineProgress, PipelineProviderConfig,
 };
 use summarizer_types::{
     CliProvider, DocumentOutput, PipelineConfig, PipelineError, SummarizerMode, SummarizerProvider,
@@ -203,146 +203,6 @@ impl Default for AppearanceSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenAiSettings {
-    base_url: String,
-    api_key: String,
-    model: String,
-    model_2: String,
-    model_3: String,
-    vision_model: String,
-}
-
-impl Default for OpenAiSettings {
-    fn default() -> Self {
-        Self {
-            base_url: "https://api.openai.com/v1".to_string(),
-            api_key: String::new(),
-            model: "gpt-4.1-mini".to_string(),
-            model_2: "gpt-4.1-mini".to_string(),
-            model_3: "gpt-4.1-mini".to_string(),
-            vision_model: "gpt-4.1-mini".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct LlamaCppSettings {
-    base_url: String,
-    vision_base_url: String,
-    api_key: String,
-    model: String,
-    model_2: String,
-    model_3: String,
-    vision_model: String,
-}
-
-impl Default for LlamaCppSettings {
-    fn default() -> Self {
-        Self {
-            base_url: "http://localhost:11440/v1".to_string(),
-            vision_base_url: "http://localhost:11439/v1".to_string(),
-            api_key: String::new(),
-            model: "model.gguf".to_string(),
-            model_2: "model.gguf".to_string(),
-            model_3: "model.gguf".to_string(),
-            vision_model: "model.gguf".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OllamaSettings {
-    openai_base_url: String,
-    api_key: String,
-    model: String,
-    model_2: String,
-    model_3: String,
-    vision_model: String,
-}
-
-impl Default for OllamaSettings {
-    fn default() -> Self {
-        Self {
-            openai_base_url: "http://localhost:11434/v1".to_string(),
-            api_key: String::new(),
-            model: "gemma4:12b-it-qat".to_string(),
-            model_2: "gemma4:12b-it-qat".to_string(),
-            model_3: "gemma4:12b-it-qat".to_string(),
-            vision_model: "llava".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CliSettings {
-    executable: String,
-    args: String,
-    #[serde(default = "default_reasoning_effort")]
-    reasoning_effort: String,
-    timeout_seconds: u64,
-}
-
-impl CliSettings {
-    fn new(executable: &str) -> Self {
-        Self {
-            executable: executable.to_string(),
-            args: String::new(),
-            reasoning_effort: default_reasoning_effort(),
-            timeout_seconds: 600,
-        }
-    }
-}
-
-fn default_reasoning_effort() -> String {
-    "medium".to_string()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProviderSettings {
-    openai: OpenAiSettings,
-    llama_cpp: LlamaCppSettings,
-    ollama: OllamaSettings,
-    #[serde(default = "default_codex_settings")]
-    codex: CliSettings,
-    #[serde(default = "default_claude_settings")]
-    claude: CliSettings,
-    #[serde(default = "default_grok_settings")]
-    grok: CliSettings,
-    #[serde(default = "default_copilot_settings")]
-    copilot: CliSettings,
-}
-
-impl Default for ProviderSettings {
-    fn default() -> Self {
-        Self {
-            openai: OpenAiSettings::default(),
-            llama_cpp: LlamaCppSettings::default(),
-            ollama: OllamaSettings::default(),
-            codex: default_codex_settings(),
-            claude: default_claude_settings(),
-            grok: default_grok_settings(),
-            copilot: default_copilot_settings(),
-        }
-    }
-}
-
-fn default_codex_settings() -> CliSettings {
-    CliSettings::new("codex")
-}
-
-fn default_claude_settings() -> CliSettings {
-    CliSettings::new("claude")
-}
-
-fn default_grok_settings() -> CliSettings {
-    CliSettings::new("grok")
-}
-
-fn default_copilot_settings() -> CliSettings {
-    CliSettings::new("copilot")
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 struct VisionProviderVisibilitySettings {
     llama_cpp: bool,
     ollama: bool,
@@ -498,7 +358,7 @@ fn default_update_check_enabled() -> bool {
 struct DesktopSettings {
     appearance: AppearanceSettings,
     providers: ProviderSettings,
-    #[serde(default = "desktop_default_pipeline_config")]
+    #[serde(default = "PipelineConfig::desktop_default")]
     pipeline_defaults: PipelineConfig,
     #[serde(default)]
     provider_visibility: ProviderVisibilitySettings,
@@ -513,19 +373,11 @@ impl Default for DesktopSettings {
         Self {
             appearance: AppearanceSettings::default(),
             providers: ProviderSettings::default(),
-            pipeline_defaults: desktop_default_pipeline_config(),
+            pipeline_defaults: PipelineConfig::desktop_default(),
             provider_visibility: ProviderVisibilitySettings::default(),
             logging: LoggingSettings::default(),
             updates: UpdatePreferences::default(),
         }
-    }
-}
-
-fn desktop_default_pipeline_config() -> PipelineConfig {
-    PipelineConfig {
-        vision_mode: VisionMode::Codex,
-        summarizer_provider: SummarizerProvider::Codex,
-        ..PipelineConfig::default()
     }
 }
 
@@ -702,36 +554,11 @@ fn parse_cli_enqueue(args: &[String]) -> AppResult<Option<CliEnqueueRequest>> {
     }
 
     let config = match config_json {
-        Some(raw) => merge_config_json_onto_desktop_default(&raw)?,
-        None => desktop_default_pipeline_config(),
+        Some(raw) => PipelineConfig::merge_json_onto_desktop_default(&raw)
+            .map_err(|err| AppError::new("cli", err))?,
+        None => PipelineConfig::desktop_default(),
     };
     Ok(Some(CliEnqueueRequest { files, config }))
-}
-
-/// Apply a `--config-json` override on top of the desktop default pipeline
-/// config.
-///
-/// The override is a (possibly partial) JSON object: only the keys it contains
-/// change, and every field it omits keeps its desktop default (e.g. Step 2
-/// Vision stays on Codex). Deserializing the override standalone would instead
-/// reset omitted fields to `PipelineConfig::default()` — notably
-/// `vision_mode = None` — which silently disables vision whenever a caller
-/// flips a single unrelated toggle like `vision_skip_classification`.
-fn merge_config_json_onto_desktop_default(raw: &str) -> AppResult<PipelineConfig> {
-    let overrides: serde_json::Value = serde_json::from_str(raw)
-        .map_err(|err| AppError::new("cli", format!("Invalid --config-json: {err}")))?;
-    let serde_json::Value::Object(overrides) = overrides else {
-        return Err(AppError::new("cli", "--config-json must be a JSON object."));
-    };
-    let mut merged = serde_json::to_value(desktop_default_pipeline_config())
-        .map_err(|err| AppError::new("cli", format!("Could not encode default config: {err}")))?;
-    if let Some(base) = merged.as_object_mut() {
-        for (key, value) in overrides {
-            base.insert(key, value);
-        }
-    }
-    serde_json::from_value(merged)
-        .map_err(|err| AppError::new("cli", format!("Invalid --config-json: {err}")))
 }
 
 /// Bring the main window to the foreground. Used when a CLI request is forwarded
@@ -1274,7 +1101,7 @@ async fn drain_queue(app: AppHandle, state: DesktopState) {
             .await;
             continue;
         }
-        let provider_config = pipeline_provider_config(&settings);
+        let provider_config = provider_config_from_settings(&settings.providers);
 
         let _ = app.emit("job:started", &claim.job);
         run_job_task(
@@ -1690,159 +1517,6 @@ fn pdfium_library_name() -> &'static str {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         "libpdfium.so"
-    }
-}
-
-fn pipeline_provider_config(settings: &DesktopSettings) -> PipelineProviderConfig {
-    let providers = &settings.providers;
-    let openai_model = setting_or(&providers.openai.model, "gpt-4.1-mini");
-    let llama_model = setting_or(&providers.llama_cpp.model, "model.gguf");
-    let ollama_model = setting_or(&providers.ollama.model, "gemma4:12b-it-qat");
-
-    PipelineProviderConfig {
-        openai: HttpProviderConfig {
-            base_url: setting_or(&providers.openai.base_url, "https://api.openai.com/v1"),
-            api_key: optional_setting(&providers.openai.api_key),
-            model: openai_model.clone(),
-            model_2: setting_or(&providers.openai.model_2, &openai_model),
-            model_3: setting_or(&providers.openai.model_3, &openai_model),
-            vision_model: setting_or(&providers.openai.vision_model, "gpt-4.1-mini"),
-        },
-        llama_cpp: LlamaCppProviderConfig {
-            base_url: setting_or(&providers.llama_cpp.base_url, "http://localhost:11440/v1"),
-            vision_base_url: setting_or(
-                fallback_url(
-                    &providers.llama_cpp.vision_base_url,
-                    &providers.llama_cpp.base_url,
-                ),
-                "http://localhost:11440/v1",
-            ),
-            api_key: optional_setting(&providers.llama_cpp.api_key),
-            model: llama_model.clone(),
-            model_2: setting_or(&providers.llama_cpp.model_2, &llama_model),
-            model_3: setting_or(&providers.llama_cpp.model_3, &llama_model),
-            vision_model: setting_or(&providers.llama_cpp.vision_model, "model.gguf"),
-        },
-        ollama: OllamaProviderConfig {
-            openai_base_url: setting_or(
-                &providers.ollama.openai_base_url,
-                "http://localhost:11434/v1",
-            ),
-            api_key: optional_setting(&providers.ollama.api_key),
-            model: ollama_model.clone(),
-            model_2: setting_or(&providers.ollama.model_2, &ollama_model),
-            model_3: setting_or(&providers.ollama.model_3, &ollama_model),
-            vision_model: setting_or(&providers.ollama.vision_model, "llava"),
-        },
-        gemini: GeminiProviderConfig {
-            base_url: "https://generativelanguage.googleapis.com".to_string(),
-            api_key: None,
-            vision_model: "gemini-2.5-flash".to_string(),
-        },
-        codex: cli_runtime_config(&providers.codex, codex_cli_args),
-        claude: cli_runtime_config(&providers.claude, claude_cli_args),
-        grok: cli_runtime_config(&providers.grok, grok_cli_args),
-        copilot: cli_runtime_config(&providers.copilot, copilot_cli_args),
-    }
-}
-
-fn setting_or(value: &str, default: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        default.to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-fn optional_setting(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
-fn cli_runtime_config(
-    settings: &CliSettings,
-    args: fn(&CliSettings) -> String,
-) -> CliRuntimeConfig {
-    CliRuntimeConfig {
-        executable: resolved_cli_executable_value(&settings.executable),
-        args: split_cli_args(&args(settings)),
-        timeout_seconds: settings.timeout_seconds,
-        retries: summarizer_pipeline::DEFAULT_CLI_RETRIES,
-    }
-}
-
-fn codex_cli_args(settings: &CliSettings) -> String {
-    append_cli_args(
-        vec![
-            "-c".to_string(),
-            format!(
-                "model_reasoning_effort={}",
-                normalized_reasoning_effort(&settings.reasoning_effort)
-            ),
-        ],
-        &settings.args,
-    )
-}
-
-fn claude_cli_args(settings: &CliSettings) -> String {
-    append_cli_args(
-        vec![
-            "--effort".to_string(),
-            normalized_reasoning_effort(&settings.reasoning_effort).to_string(),
-        ],
-        &settings.args,
-    )
-}
-
-fn grok_cli_args(settings: &CliSettings) -> String {
-    append_cli_args(
-        vec![
-            "--no-auto-update".to_string(),
-            "--sandbox".to_string(),
-            "read-only".to_string(),
-            "--disable-web-search".to_string(),
-            "--no-subagents".to_string(),
-            "--no-plan".to_string(),
-            "--always-approve".to_string(),
-            "--tools=".to_string(),
-        ],
-        &settings.args,
-    )
-}
-
-fn copilot_cli_args(settings: &CliSettings) -> String {
-    // The Copilot provider bakes the required programmatic flags (`-p`,
-    // `--allow-all-tools`, `--no-color`, `-s`) into the vision/summarization
-    // crates, so the desktop layer only forwards the user's custom args (for
-    // example `--model claude-sonnet-4.5`).
-    append_cli_args(Vec::new(), &settings.args)
-}
-
-fn append_cli_args(mut args: Vec<String>, custom_args: &str) -> String {
-    args.extend(
-        custom_args
-            .split_whitespace()
-            .filter(|arg| !arg.is_empty())
-            .map(ToString::to_string),
-    );
-    args.join(" ")
-}
-
-fn split_cli_args(args: &str) -> Vec<String> {
-    args.split_whitespace()
-        .filter(|arg| !arg.is_empty())
-        .map(ToString::to_string)
-        .collect()
-}
-
-fn normalized_reasoning_effort(value: &str) -> &str {
-    match value.trim() {
-        "low" => "low",
-        "high" => "high",
-        "xhigh" => "xhigh",
-        "max" => "max",
-        _ => "medium",
     }
 }
 
@@ -2329,25 +2003,12 @@ fn command_available(executable: &str) -> bool {
     resolve_cli_executable(executable).is_some()
 }
 
-fn resolved_cli_executable_value(executable: &str) -> String {
-    resolve_cli_executable(executable)
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| executable.trim().to_string())
-}
-
 fn resolve_cli_executable(executable: &str) -> Option<PathBuf> {
-    resolve_cli_executable_with_extra_dirs(executable, &desktop_cli_extra_dirs())
+    resolve_cli_executable_with_extra_dirs(executable, &default_cli_extra_dirs())
 }
 
 fn cli_search_path() -> Option<std::ffi::OsString> {
-    cli_search_path_with_extra_dirs(&desktop_cli_extra_dirs())
-}
-
-fn desktop_cli_extra_dirs() -> Vec<PathBuf> {
-    vec![
-        PathBuf::from("/Applications/Codex.app/Contents/Resources"),
-        PathBuf::from("/Applications/cmux.app/Contents/Resources/bin"),
-    ]
+    cli_search_path_with_extra_dirs(&default_cli_extra_dirs())
 }
 
 fn required_secret<'a>(label: &str, value: &'a str) -> Result<&'a str, String> {
@@ -2763,11 +2424,10 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_queued_jobs, cancel_job_in_store, claim_next_queued_in_store, claude_cli_args,
-        codex_cli_args, command_available, desktop_default_pipeline_config, evaluate_release,
-        grok_cli_args, job_output_dir, next_queued_job_index, parse_cli_enqueue,
+        build_queued_jobs, cancel_job_in_store, claim_next_queued_in_store, command_available,
+        evaluate_release, job_output_dir, next_queued_job_index, parse_cli_enqueue,
         provider_health_url, required_providers, validate_queue_runtime_requirements_with_renderer,
-        CliSettings, DesktopJobStatus, DesktopSettings, JobCancelEvent, JobStore, RequiredProvider,
+        DesktopJobStatus, DesktopSettings, JobCancelEvent, JobStore, RequiredProvider,
     };
     #[cfg(unix)]
     use super::{
@@ -2781,6 +2441,9 @@ mod tests {
         fs,
         path::PathBuf,
         sync::{Mutex, MutexGuard},
+    };
+    use summarizer_pipeline::settings::{
+        claude_cli_args, codex_cli_args, grok_cli_args, provider_config_from_settings, CliSettings,
     };
     use summarizer_types::{
         CliProvider, PipelineConfig, SummarizerMode, SummarizerProvider, VisionMode,
@@ -2835,7 +2498,7 @@ mod tests {
             .unwrap()
             .expect("expected an enqueue request");
         assert_eq!(parsed.files, vec!["/tmp/a.pdf", "/tmp/b.pptx"]);
-        assert_eq!(parsed.config, desktop_default_pipeline_config());
+        assert_eq!(parsed.config, PipelineConfig::desktop_default());
     }
 
     #[test]
@@ -2895,6 +2558,222 @@ mod tests {
             "[1,2,3]"
         ]))
         .is_err());
+    }
+
+    #[test]
+    fn desktop_settings_fixture_round_trips_and_maps_providers() {
+        let fixture = serde_json::json!({
+            "appearance": {"theme": "light"},
+            "providers": {
+                "openai": {
+                    "base_url": "https://api.openai.com/v1",
+                    "api_key": "REDACTED",
+                    "model": "gpt-4.1-mini",
+                    "model_2": "gpt-4.1",
+                    "model_3": "gpt-4.1-large",
+                    "vision_model": "gpt-4.1-mini"
+                },
+                "llama_cpp": {
+                    "base_url": "http://localhost:11440/v1",
+                    "vision_base_url": "http://localhost:11439/v1",
+                    "api_key": "",
+                    "model": "summary.gguf",
+                    "model_2": "summary-2.gguf",
+                    "model_3": "summary-3.gguf",
+                    "vision_model": "vision.gguf"
+                },
+                "ollama": {
+                    "openai_base_url": "http://localhost:11434/v1",
+                    "api_key": "",
+                    "model": "gemma4:12b-it-qat",
+                    "model_2": "gemma4:12b-it-qat",
+                    "model_3": "gemma4:12b-it-qat",
+                    "vision_model": "llava"
+                },
+                "codex": {
+                    "executable": "codex",
+                    "args": "--profile summarizer",
+                    "model": "",
+                    "reasoning_effort": "high",
+                    "timeout_seconds": 900
+                },
+                "claude": {
+                    "executable": "claude",
+                    "args": "",
+                    "model": "",
+                    "reasoning_effort": "medium",
+                    "timeout_seconds": 600
+                },
+                "grok": {
+                    "executable": "grok",
+                    "args": "",
+                    "model": "",
+                    "reasoning_effort": "medium",
+                    "timeout_seconds": 600
+                },
+                "copilot": {
+                    "executable": "copilot",
+                    "args": "--model claude-sonnet-4.5",
+                    "model": "",
+                    "reasoning_effort": "medium",
+                    "timeout_seconds": 600
+                }
+            },
+            "pipeline_defaults": {
+                "run_extraction": true,
+                "extract_only": false,
+                "skip_tables": false,
+                "skip_images": false,
+                "skip_pptx_tables": false,
+                "text_only": false,
+                "pdf_image_dpi": "200",
+                "vision_mode": "codex",
+                "vision_classifier_mode": null,
+                "vision_extractor_mode": null,
+                "vision_cli_provider": null,
+                "vision_skip_classification": false,
+                "chunk_size": 3000,
+                "chunk_overlap": 80,
+                "run_summarization": true,
+                "summarizer_mode": "full",
+                "summarizer_provider": "codex",
+                "summarizer_detailed_extraction": false,
+                "summarizer_insight_mode": false,
+                "summarizer_cli_provider": null,
+                "max_tokens_per_page": 100000,
+                "max_seconds_per_page": 300,
+                "keep_base64_images": false
+            },
+            "provider_visibility": {
+                "vision": {"llama_cpp": false, "ollama": false, "openai": false, "codex": true, "claude": false, "grok": false, "copilot": true},
+                "classifier": {"llama_cpp": false, "ollama": false, "openai": false, "codex": true, "claude": false, "grok": false, "copilot": false},
+                "summarizer": {"llama_cpp": false, "ollama": false, "openai": false, "codex": true, "claude": false, "grok": false, "copilot": true}
+            },
+            "logging": {
+                "enabled": true,
+                "level": "info",
+                "retention_days": 14,
+                "max_file_mb": 50,
+                "capture_frontend": true,
+                "capture_dev_services": true,
+                "redact_secrets": true
+            },
+            "updates": {
+                "enabled": true,
+                "skipped_version": null
+            }
+        });
+        let settings: DesktopSettings = serde_json::from_value(fixture.clone()).unwrap();
+
+        assert_eq!(serde_json::to_value(&settings).unwrap(), fixture);
+
+        let provider_config = provider_config_from_settings(&settings.providers);
+        assert_eq!(provider_config.openai.model_2, "gpt-4.1");
+        assert_eq!(provider_config.openai.model_3, "gpt-4.1-large");
+        assert_eq!(provider_config.openai.api_key.as_deref(), Some("REDACTED"));
+        assert_eq!(
+            provider_config.llama_cpp.vision_base_url,
+            "http://localhost:11439/v1"
+        );
+        assert_eq!(provider_config.llama_cpp.model, "summary.gguf");
+        assert_eq!(
+            provider_config.codex.args,
+            vec![
+                "-c",
+                "model_reasoning_effort=high",
+                "--profile",
+                "summarizer"
+            ]
+        );
+        assert_eq!(provider_config.codex.timeout_seconds, 900);
+        assert_eq!(
+            provider_config.copilot.args,
+            vec!["--model", "claude-sonnet-4.5"]
+        );
+
+        let mut selected_model_fixture = fixture;
+        selected_model_fixture["providers"]["codex"]["model"] = serde_json::json!("gpt-5.6-sol");
+        let selected_settings: DesktopSettings =
+            serde_json::from_value(selected_model_fixture).unwrap();
+        let selected_config = provider_config_from_settings(&selected_settings.providers);
+        assert_eq!(
+            selected_config.codex.args,
+            vec![
+                "--model",
+                "gpt-5.6-sol",
+                "-c",
+                "model_reasoning_effort=high",
+                "--profile",
+                "summarizer"
+            ]
+        );
+        assert_eq!(
+            selected_config
+                .codex
+                .args
+                .iter()
+                .filter(|arg| arg.as_str() == "--model")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn legacy_settings_without_cli_models_upgrade_codex_to_terra_only() {
+        let mut legacy = serde_json::to_value(DesktopSettings::default()).unwrap();
+        for provider in ["codex", "claude", "grok", "copilot"] {
+            legacy["providers"][provider]
+                .as_object_mut()
+                .unwrap()
+                .remove("model");
+        }
+        legacy["providers"]["codex"]["args"] = serde_json::json!("--profile summarizer");
+        legacy["providers"]["codex"]["reasoning_effort"] = serde_json::json!("high");
+
+        let settings: DesktopSettings = serde_json::from_value(legacy).unwrap();
+
+        assert_eq!(settings.providers.codex.model, "gpt-5.6-terra");
+        assert_eq!(settings.providers.claude.model, "");
+        assert_eq!(settings.providers.grok.model, "");
+        assert_eq!(settings.providers.copilot.model, "");
+        assert_eq!(
+            provider_config_from_settings(&settings.providers)
+                .codex
+                .args,
+            vec![
+                "--model",
+                "gpt-5.6-terra",
+                "-c",
+                "model_reasoning_effort=high",
+                "--profile",
+                "summarizer"
+            ]
+        );
+        assert_eq!(
+            provider_config_from_settings(&settings.providers)
+                .codex
+                .args
+                .iter()
+                .filter(|arg| arg.as_str() == "--model")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn explicit_empty_codex_model_stays_cli_default() {
+        let mut value = serde_json::to_value(DesktopSettings::default()).unwrap();
+        value["providers"]["codex"]["model"] = serde_json::json!("");
+
+        let settings: DesktopSettings = serde_json::from_value(value).unwrap();
+
+        assert_eq!(settings.providers.codex.model, "");
+        assert_eq!(
+            provider_config_from_settings(&settings.providers)
+                .codex
+                .args,
+            vec!["-c", "model_reasoning_effort=medium"]
+        );
     }
 
     #[test]
@@ -3178,6 +3057,7 @@ mod tests {
         assert_eq!(CliSettings::new("codex").reasoning_effort, "medium");
         assert_eq!(CliSettings::new("claude").reasoning_effort, "medium");
         assert_eq!(CliSettings::new("grok").reasoning_effort, "medium");
+        assert_eq!(CliSettings::new("codex").model, "");
     }
 
     #[test]
@@ -3398,6 +3278,27 @@ mod tests {
 
         assert!(path.exists());
         assert!(settings.provider_visibility.vision.codex);
+        assert_eq!(settings.providers.codex.model, "gpt-5.6-terra");
+        assert_eq!(value["providers"]["codex"]["model"], "gpt-5.6-terra");
+        let codex_args = provider_config_from_settings(&settings.providers)
+            .codex
+            .args;
+        assert_eq!(
+            codex_args,
+            vec![
+                "--model",
+                "gpt-5.6-terra",
+                "-c",
+                "model_reasoning_effort=medium"
+            ]
+        );
+        assert_eq!(
+            codex_args
+                .iter()
+                .filter(|arg| arg.as_str() == "--model")
+                .count(),
+            1
+        );
         assert_eq!(value["appearance"]["theme"], "light");
     }
 
