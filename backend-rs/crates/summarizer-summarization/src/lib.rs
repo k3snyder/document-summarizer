@@ -1009,7 +1009,7 @@ impl CliSummarizer {
         page.summary_notes = if notes.is_empty() { None } else { Some(notes) };
         page.summary_topics = topics;
         page.summary_relevancy = None;
-        page.summary_quality_validated = page.summary_notes.as_ref().map(|_| false);
+        page.summary_quality_validated = None;
         Ok(SummarizationResult {
             page,
             attempts_used: 1,

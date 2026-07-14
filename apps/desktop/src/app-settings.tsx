@@ -34,6 +34,30 @@ import {
   VisibleVisionProvider,
 } from "./types";
 
+const PROVIDER_VISIBILITY_ORDER: Record<VisibleVisionProvider, number> = {
+  codex: 0,
+  llama_cpp: 1,
+  copilot: 2,
+  openai: 3,
+  ollama: 4,
+  grok: 5,
+  claude: 6,
+};
+
+const VISION_PROVIDER_VISIBILITY_OPTIONS = [...VISION_PROVIDER_OPTIONS].sort(
+  (left, right) =>
+    PROVIDER_VISIBILITY_ORDER[left.value] -
+    PROVIDER_VISIBILITY_ORDER[right.value],
+);
+
+const SUMMARIZER_PROVIDER_VISIBILITY_OPTIONS = [
+  ...SUMMARIZER_PROVIDER_OPTIONS,
+].sort(
+  (left, right) =>
+    PROVIDER_VISIBILITY_ORDER[left.value] -
+    PROVIDER_VISIBILITY_ORDER[right.value],
+);
+
 export function SettingsView({
   settings,
   settingsPath,
@@ -203,126 +227,43 @@ export function SettingsView({
   return (
     <section className="panel settings-panel">
       <div className="panel-header">
-        <div>
-          <h3>Providers</h3>
-          <p>Settings file: {displaySettingsPath(settingsPath)}</p>
-        </div>
+        <p className="settings-file-path">
+          Settings file: {displaySettingsPath(settingsPath)}
+        </p>
         <button className="button primary" onClick={saveSettings}>
           <Save size={16} />
           Save
         </button>
       </div>
 
-      <div className="settings-section">
-        <h4>Appearance</h4>
-        <SelectField
-          label="Theme"
-          value={draft.appearance.theme}
-          options={["light", "system", "dark"]}
-          onChange={(value) => updateTheme(value as ThemePreference)}
-        />
-      </div>
-
-      <div className="settings-section">
-        <div className="section-heading">
-          <div>
-            <h4>Updates</h4>
-          </div>
-        </div>
-        <SwitchRow
-          label="Check for updates on launch"
-          checked={(draft.updates ?? DEFAULT_UPDATE_SETTINGS).enabled}
-          onChange={(checked) => updateUpdates("enabled", checked)}
-        />
-        <div className="settings-version-row">
-          <strong>Current version</strong>
-          <span className="version-pill" title="Installed app version">
-            v{appVersion || "—"}
-          </span>
-        </div>
-      </div>
-
-      <div className="settings-section logging-settings-section">
-        <div className="section-heading">
-          <div>
-            <h4>Logging</h4>
-            <span>{draft.logging.enabled ? "Enabled" : "Disabled"}</span>
-          </div>
-        </div>
-        <div className="field-grid">
+      <div className="settings-top-grid">
+        <div className="settings-section">
+          <h4>Appearance</h4>
           <SelectField
-            label="Level"
-            value={draft.logging.level}
-            options={["trace", "debug", "info", "warn", "error"]}
-            onChange={(value) => updateLogging("level", value as LogLevel)}
-          />
-          <NumberField
-            label="Retention days"
-            value={draft.logging.retention_days}
-            min={1}
-            step={1}
-            onChange={(value) => updateLogging("retention_days", value)}
-          />
-          <NumberField
-            label="Max file MB"
-            value={draft.logging.max_file_mb}
-            min={1}
-            step={5}
-            onChange={(value) => updateLogging("max_file_mb", value)}
+            label="Theme"
+            value={draft.appearance.theme}
+            options={["light", "system", "dark"]}
+            onChange={(value) => updateTheme(value as ThemePreference)}
           />
         </div>
-        <div className="provider-toggle-grid logging-toggle-grid">
-          <SettingsToggle
-            label="Logging"
-            checked={draft.logging.enabled}
-            onChange={(checked) => updateLogging("enabled", checked)}
-          />
-          <SettingsToggle
-            label="Frontend"
-            checked={draft.logging.capture_frontend}
-            onChange={(checked) => updateLogging("capture_frontend", checked)}
-          />
-          <SettingsToggle
-            label="Dev Services"
-            checked={draft.logging.capture_dev_services}
-            onChange={(checked) =>
-              updateLogging("capture_dev_services", checked)
-            }
-          />
-          <SettingsToggle
-            label="Redaction"
-            checked={draft.logging.redact_secrets}
-            onChange={(checked) => updateLogging("redact_secrets", checked)}
-          />
-        </div>
-      </div>
 
-      <div className="settings-section">
-        <div className="section-heading">
-          <div>
-            <h4>Summarization Budget</h4>
-            <span>Defaults for new jobs.</span>
+        <div className="settings-section">
+          <div className="section-heading">
+            <div>
+              <h4>Updates</h4>
+            </div>
           </div>
-        </div>
-        <div className="field-grid">
-          <NumberField
-            label="Max tokens/page"
-            value={draft.pipeline_defaults.max_tokens_per_page}
-            min={1000}
-            step={1000}
-            onChange={(value) =>
-              updatePipelineDefault("max_tokens_per_page", value)
-            }
+          <SwitchRow
+            label="Check for updates on launch"
+            checked={(draft.updates ?? DEFAULT_UPDATE_SETTINGS).enabled}
+            onChange={(checked) => updateUpdates("enabled", checked)}
           />
-          <NumberField
-            label="Max seconds/page"
-            value={draft.pipeline_defaults.max_seconds_per_page}
-            min={5}
-            step={5}
-            onChange={(value) =>
-              updatePipelineDefault("max_seconds_per_page", value)
-            }
-          />
+          <div className="settings-version-row">
+            <strong>Current version</strong>
+            <span className="version-pill" title="Installed app version">
+              v{appVersion || "—"}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -336,7 +277,7 @@ export function SettingsView({
         <ProviderVisibilityGroup
           title="Vision Providers"
           description="Shown when visual page analysis is enabled."
-          options={VISION_PROVIDER_OPTIONS}
+          options={VISION_PROVIDER_VISIBILITY_OPTIONS}
           visibility={
             (draft.provider_visibility ?? DEFAULT_PROVIDER_VISIBILITY).vision
           }
@@ -347,7 +288,7 @@ export function SettingsView({
         <ProviderVisibilityGroup
           title="Classifier Providers"
           description="Shown in advanced vision mode for visual page classification."
-          options={VISION_PROVIDER_OPTIONS}
+          options={VISION_PROVIDER_VISIBILITY_OPTIONS}
           visibility={
             (draft.provider_visibility ?? DEFAULT_PROVIDER_VISIBILITY)
               .classifier
@@ -359,7 +300,7 @@ export function SettingsView({
         <ProviderVisibilityGroup
           title="Summarizer Providers"
           description="Shown when choosing the LLM provider for summaries."
-          options={SUMMARIZER_PROVIDER_OPTIONS}
+          options={SUMMARIZER_PROVIDER_VISIBILITY_OPTIONS}
           visibility={
             (draft.provider_visibility ?? DEFAULT_PROVIDER_VISIBILITY)
               .summarizer
@@ -367,6 +308,113 @@ export function SettingsView({
           onChange={updateSummarizerProviderVisibility}
         />
       </div>
+
+      <ProviderBlock title="CLI Providers">
+        <TextField
+          label="Codex executable"
+          value={draft.providers.codex.executable}
+          onChange={(value) => updateProvider("codex", "executable", value)}
+        />
+        <TextField
+          label="Codex args"
+          value={draft.providers.codex.args}
+          onChange={(value) => updateProvider("codex", "args", value)}
+        />
+        <SelectField
+          label="Codex model"
+          value={draft.providers.codex.model}
+          options={codexModelOptions}
+          onChange={(value) => updateProvider("codex", "model", value)}
+        />
+        <SelectField
+          label="Codex reasoning effort"
+          value={draft.providers.codex.reasoning_effort}
+          options={REASONING_EFFORT_OPTIONS}
+          onChange={(value) =>
+            updateProvider(
+              "codex",
+              "reasoning_effort",
+              value as ReasoningEffort,
+            )
+          }
+        />
+        <NumberField
+          label="Codex timeout seconds"
+          value={draft.providers.codex.timeout_seconds}
+          min={1}
+          step={30}
+          onChange={(value) =>
+            updateProvider("codex", "timeout_seconds", value)
+          }
+        />
+        <TextField
+          label="Claude executable"
+          value={draft.providers.claude.executable}
+          onChange={(value) => updateProvider("claude", "executable", value)}
+        />
+        <TextField
+          label="Claude args"
+          value={draft.providers.claude.args}
+          onChange={(value) => updateProvider("claude", "args", value)}
+        />
+        <SelectField
+          label="Claude reasoning effort"
+          value={draft.providers.claude.reasoning_effort}
+          options={REASONING_EFFORT_OPTIONS}
+          onChange={(value) =>
+            updateProvider(
+              "claude",
+              "reasoning_effort",
+              value as ReasoningEffort,
+            )
+          }
+        />
+        <NumberField
+          label="Claude timeout seconds"
+          value={draft.providers.claude.timeout_seconds}
+          min={1}
+          step={30}
+          onChange={(value) =>
+            updateProvider("claude", "timeout_seconds", value)
+          }
+        />
+        <TextField
+          label="Grok executable"
+          value={draft.providers.grok.executable}
+          onChange={(value) => updateProvider("grok", "executable", value)}
+        />
+        <TextField
+          label="Grok args"
+          value={draft.providers.grok.args}
+          onChange={(value) => updateProvider("grok", "args", value)}
+        />
+        <NumberField
+          label="Grok timeout seconds"
+          value={draft.providers.grok.timeout_seconds}
+          min={1}
+          step={30}
+          onChange={(value) => updateProvider("grok", "timeout_seconds", value)}
+        />
+        <TextField
+          label="Copilot executable"
+          value={draft.providers.copilot.executable}
+          onChange={(value) => updateProvider("copilot", "executable", value)}
+        />
+        <TextField
+          label="Copilot args"
+          value={draft.providers.copilot.args}
+          onChange={(value) => updateProvider("copilot", "args", value)}
+        />
+        <NumberField
+          label="Copilot timeout seconds"
+          value={draft.providers.copilot.timeout_seconds}
+          min={1}
+          step={30}
+          onChange={(value) =>
+            updateProvider("copilot", "timeout_seconds", value)
+          }
+        />
+      </ProviderBlock>
 
       <ProviderBlock title="llama.cpp">
         <TextField
@@ -481,112 +529,90 @@ export function SettingsView({
         />
       </ProviderBlock>
 
-      <ProviderBlock title="CLI Providers">
-        <TextField
-          label="Codex executable"
-          value={draft.providers.codex.executable}
-          onChange={(value) => updateProvider("codex", "executable", value)}
-        />
-        <TextField
-          label="Codex args"
-          value={draft.providers.codex.args}
-          onChange={(value) => updateProvider("codex", "args", value)}
-        />
-        <SelectField
-          label="Codex model"
-          value={draft.providers.codex.model}
-          options={codexModelOptions}
-          onChange={(value) => updateProvider("codex", "model", value)}
-        />
-        <SelectField
-          label="Codex reasoning effort"
-          value={draft.providers.codex.reasoning_effort}
-          options={REASONING_EFFORT_OPTIONS}
-          onChange={(value) =>
-            updateProvider(
-              "codex",
-              "reasoning_effort",
-              value as ReasoningEffort,
-            )
-          }
-        />
-        <NumberField
-          label="Codex timeout seconds"
-          value={draft.providers.codex.timeout_seconds}
-          min={1}
-          step={30}
-          onChange={(value) =>
-            updateProvider("codex", "timeout_seconds", value)
-          }
-        />
-        <TextField
-          label="Claude executable"
-          value={draft.providers.claude.executable}
-          onChange={(value) => updateProvider("claude", "executable", value)}
-        />
-        <TextField
-          label="Claude args"
-          value={draft.providers.claude.args}
-          onChange={(value) => updateProvider("claude", "args", value)}
-        />
-        <SelectField
-          label="Claude reasoning effort"
-          value={draft.providers.claude.reasoning_effort}
-          options={REASONING_EFFORT_OPTIONS}
-          onChange={(value) =>
-            updateProvider(
-              "claude",
-              "reasoning_effort",
-              value as ReasoningEffort,
-            )
-          }
-        />
-        <NumberField
-          label="Claude timeout seconds"
-          value={draft.providers.claude.timeout_seconds}
-          min={1}
-          step={30}
-          onChange={(value) =>
-            updateProvider("claude", "timeout_seconds", value)
-          }
-        />
-        <TextField
-          label="Grok executable"
-          value={draft.providers.grok.executable}
-          onChange={(value) => updateProvider("grok", "executable", value)}
-        />
-        <TextField
-          label="Grok args"
-          value={draft.providers.grok.args}
-          onChange={(value) => updateProvider("grok", "args", value)}
-        />
-        <NumberField
-          label="Grok timeout seconds"
-          value={draft.providers.grok.timeout_seconds}
-          min={1}
-          step={30}
-          onChange={(value) => updateProvider("grok", "timeout_seconds", value)}
-        />
-        <TextField
-          label="Copilot executable"
-          value={draft.providers.copilot.executable}
-          onChange={(value) => updateProvider("copilot", "executable", value)}
-        />
-        <TextField
-          label="Copilot args"
-          value={draft.providers.copilot.args}
-          onChange={(value) => updateProvider("copilot", "args", value)}
-        />
-        <NumberField
-          label="Copilot timeout seconds"
-          value={draft.providers.copilot.timeout_seconds}
-          min={1}
-          step={30}
-          onChange={(value) =>
-            updateProvider("copilot", "timeout_seconds", value)
-          }
-        />
-      </ProviderBlock>
+      <div className="settings-section logging-settings-section">
+        <div className="section-heading">
+          <div>
+            <h4>Logging</h4>
+            <span>{draft.logging.enabled ? "Enabled" : "Disabled"}</span>
+          </div>
+        </div>
+        <div className="field-grid logging-field-grid">
+          <SelectField
+            label="Level"
+            value={draft.logging.level}
+            options={["trace", "debug", "info", "warn", "error"]}
+            onChange={(value) => updateLogging("level", value as LogLevel)}
+          />
+          <NumberField
+            label="Retention days"
+            value={draft.logging.retention_days}
+            min={1}
+            step={1}
+            onChange={(value) => updateLogging("retention_days", value)}
+          />
+          <NumberField
+            label="Max file MB"
+            value={draft.logging.max_file_mb}
+            min={1}
+            step={5}
+            onChange={(value) => updateLogging("max_file_mb", value)}
+          />
+        </div>
+        <div className="logging-toggle-grid">
+          <SettingsToggle
+            label="Logging"
+            checked={draft.logging.enabled}
+            onChange={(checked) => updateLogging("enabled", checked)}
+          />
+          <SettingsToggle
+            label="Frontend"
+            checked={draft.logging.capture_frontend}
+            onChange={(checked) => updateLogging("capture_frontend", checked)}
+          />
+          <SettingsToggle
+            label="Dev Services"
+            checked={draft.logging.capture_dev_services}
+            onChange={(checked) =>
+              updateLogging("capture_dev_services", checked)
+            }
+          />
+          <SettingsToggle
+            label="Redaction"
+            checked={draft.logging.redact_secrets}
+            onChange={(checked) => updateLogging("redact_secrets", checked)}
+          />
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="section-heading">
+          <div>
+            <h4>Summarization Budget</h4>
+            <span>Defaults for new jobs.</span>
+          </div>
+        </div>
+        <div className="field-grid">
+          <NumberField
+            label="Max tokens/page"
+            value={draft.pipeline_defaults.max_tokens_per_page}
+            min={1000}
+            step={1000}
+            onChange={(value) =>
+              updatePipelineDefault("max_tokens_per_page", value)
+            }
+          />
+          <NumberField
+            label="Max seconds/page"
+            value={draft.pipeline_defaults.max_seconds_per_page}
+            min={5}
+            step={5}
+            onChange={(value) =>
+              updatePipelineDefault("max_seconds_per_page", value)
+            }
+          />
+        </div>
+      </div>
+
     </section>
   );
 }

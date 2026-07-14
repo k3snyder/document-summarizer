@@ -316,7 +316,7 @@ export function ProviderBlock({
   children: React.ReactNode;
 }) {
   return (
-    <details className="provider-block" open={title === "llama.cpp"}>
+    <details className="provider-block" open={title === "CLI Providers"}>
       <summary>{title}</summary>
       <div className="field-grid">{children}</div>
     </details>

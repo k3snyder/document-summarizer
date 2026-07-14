@@ -9,6 +9,39 @@ and the backend crate manifests on the same version.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-14
+
+### Changed
+
+- Reorganized the Settings page: the CLI provider block (Codex, Claude, Grok,
+  Copilot) now leads the provider sections and is expanded by default,
+  Appearance and Updates share a single row, the Logging and Summarization
+  Budget sections moved to the bottom, and the provider-visibility grids
+  (Vision, Classifier, Summarizer) list providers in a consistent order —
+  Codex CLI, llama.cpp, Copilot CLI, OpenAI, Ollama, Grok CLI, Claude CLI —
+  without changing the Process wizard's provider ordering.
+- Reordered the Page Details sections in the output viewer to Text, Tables,
+  Image Text (with the classifier verdict beneath the extracted text),
+  Embedded Images, Summary Notes, Topics, and Detailed Summary Attempts. The
+  Warnings, Embedded Images, and Detailed Summary Attempts blocks now render
+  only when they have content instead of showing empty placeholders.
+- Bumped the backend crate manifests to the release version; they had
+  remained at `0.1.0` since the initial release.
+
+### Fixed
+
+- CLI providers (Codex, Claude, Grok, Copilot) no longer flag full-document
+  summaries with a "Summary quality validation not reached" warning: the
+  relevancy/quality loop only exists for OpenAI-compatible providers, so CLI
+  summaries now report no validation state rather than `false`. The
+  unvalidated badge additionally requires a numeric relevancy score (shared
+  `summary-quality.ts` predicate with unit tests), so legacy CLI outputs stop
+  showing the badge retroactively.
+- Fixed the sidebar footer (status pill and Settings button) being pushed
+  below the fold by tall History content: the app shell is now capped at the
+  viewport height, the sidebar stays pinned, and only the workspace pane
+  scrolls.
+
 ## [0.4.0] - 2026-07-14
 
 ### Added
@@ -57,6 +90,9 @@ and the backend crate manifests on the same version.
   pipeline crate (`summarizer_pipeline::settings`) so the desktop app and the
   headless CLI use identical provider configuration, and partial config
   overrides merge onto the desktop defaults everywhere.
+- Changed the default Codex CLI model to `gpt-5.6-terra` for fresh installs
+  and for legacy settings files that predate the model field; an explicit
+  "CLI default" (empty) selection is preserved.
 - CLI runs are recorded in the CLI catalog rather than the desktop app's
   History; use `--backend app` when History visibility is wanted.
 
@@ -176,7 +212,8 @@ and the backend crate manifests on the same version.
   logs under `~/.summarizer`.
 - Headless Axum server and HTTP CLI for local workflow automation.
 
-[Unreleased]: https://github.com/k3snyder/document-summarizer/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/k3snyder/document-summarizer/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/k3snyder/document-summarizer/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/k3snyder/document-summarizer/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/k3snyder/document-summarizer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/k3snyder/document-summarizer/compare/v0.1.0...v0.2.0

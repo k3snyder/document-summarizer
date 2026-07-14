@@ -267,6 +267,28 @@ code {
   align-content: start;
 }
 
+@media (min-width: 1101px) {
+  .app-shell {
+    height: 100vh;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    min-height: 0;
+    align-self: start;
+  }
+
+  .workspace {
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+
 .topbar,
 .panel-header,
 .button-row,
@@ -2053,6 +2075,17 @@ tr:first-child td {
   max-width: 980px;
 }
 
+.panel-header .settings-file-path {
+  margin: 0;
+}
+
+.settings-top-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: stretch;
+}
+
 .settings-section {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2074,8 +2107,14 @@ tr:first-child td {
   gap: 14px;
 }
 
+.logging-field-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .logging-toggle-grid {
+  display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .settings-toggle {
@@ -2106,7 +2145,7 @@ tr:first-child td {
 
 .provider-toggle-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -2214,6 +2253,8 @@ tr:first-child td {
   .field-grid,
   .metrics,
   .provider-toggle-grid,
+  .logging-toggle-grid,
+  .settings-top-grid,
   .log-filter-bar {
     grid-template-columns: 1fr;
   }

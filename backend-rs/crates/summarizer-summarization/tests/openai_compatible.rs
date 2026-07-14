@@ -169,7 +169,7 @@ async fn cli_summarizer_runs_notes_and_topics_subprocesses() {
         ])
     );
     assert_eq!(result.page.summary_relevancy, None);
-    assert_eq!(result.page.summary_quality_validated, Some(false));
+    assert_eq!(result.page.summary_quality_validated, None);
     assert_eq!(result.attempts_used, 1);
 }
 

@@ -14,6 +14,7 @@ import {
 } from "./app-core";
 import { DesktopJob, DocumentOutput, PageOutput } from "./types";
 import { formatMetricModel } from "./metric-model";
+import { isSummaryUnvalidated } from "./summary-quality";
 
 export function OutputViewer({
   job,
@@ -163,8 +164,15 @@ function MetricsView({ output }: { output: DocumentOutput }) {
 
 function PageCard({ page, index }: { page: PageOutput; index: number }) {
   const embeddedImages = page.embedded_images ?? [];
-  const summaryUnvalidated =
-    page.summary_quality_validated === false && !!page.summary_notes?.length;
+  const summaryUnvalidated = isSummaryUnvalidated(page);
+  const detailedSummaryAttempts = [
+    notesText(page.summary_notes_1),
+    notesText(page.summary_notes_2),
+    notesText(page.summary_notes_3),
+  ];
+  const hasDetailedSummaryAttempts = detailedSummaryAttempts.some((attempt) =>
+    Boolean(attempt?.trim()),
+  );
 
   return (
     <details className="page-card">
@@ -191,48 +199,18 @@ function PageCard({ page, index }: { page: PageOutput; index: number }) {
         </span>
       </summary>
       <div className="page-content">
-        <FieldBlock
-          title="Warnings"
-          empty={
-            !page.extraction_warnings?.length &&
-            !page.summary_budget_exhausted &&
-            !summaryUnvalidated
-          }
-        >
-          <ul>
-            {(page.extraction_warnings ?? []).map((warning) => (
-              <li key={warning}>{labelize(warning)}</li>
-            ))}
-            {page.summary_budget_exhausted && (
-              <li>
-                Summary budget exhausted:{" "}
-                {labelize(page.summary_budget_exhausted)}
-              </li>
-            )}
-            {summaryUnvalidated && (
-              <li>Summary quality validation not reached.</li>
-            )}
-          </ul>
-        </FieldBlock>
+        {!!page.extraction_warnings?.length && (
+          <FieldBlock title="Warnings" empty={false}>
+            <ul>
+              {page.extraction_warnings.map((warning) => (
+                <li key={warning}>{labelize(warning)}</li>
+              ))}
+            </ul>
+          </FieldBlock>
+        )}
 
         <FieldBlock title="Text" empty={!page.text.trim()}>
           <pre>{page.text}</pre>
-        </FieldBlock>
-
-        <FieldBlock title="Topics" empty={!page.summary_topics?.length}>
-          <div className="topic-list">
-            {(page.summary_topics ?? []).map((topic) => (
-              <span key={topic}>{topic}</span>
-            ))}
-          </div>
-        </FieldBlock>
-
-        <FieldBlock title="Summary Notes" empty={!page.summary_notes?.length}>
-          <ul>
-            {(page.summary_notes ?? []).map((note, i) => (
-              <li key={i}>{note}</li>
-            ))}
-          </ul>
         </FieldBlock>
 
         <FieldBlock title="Tables" empty={!page.tables.length}>
@@ -255,31 +233,11 @@ function PageCard({ page, index }: { page: PageOutput; index: number }) {
           </div>
         </FieldBlock>
 
-        <FieldBlock title="Embedded Images" empty={!embeddedImages.length}>
-          <div className="embedded-image-list">
-            {embeddedImages.map((image) => (
-              <figure className="embedded-image-card" key={image.id}>
-                {image.base64 && (
-                  <img
-                    src={embeddedImageSrc(image)}
-                    alt={image.alt_text ?? image.filename ?? image.id}
-                  />
-                )}
-                <figcaption>
-                  <strong>
-                    {image.alt_text ?? image.filename ?? image.id}
-                  </strong>
-                  {image.content_type && <span>{image.content_type}</span>}
-                </figcaption>
-              </figure>
-            ))}
-          </div>
-        </FieldBlock>
-
         <FieldBlock
           title="Image Text"
           empty={!page.image_text && page.image_classifier == null}
         >
+          {page.image_text && <pre>{page.image_text}</pre>}
           <p>
             <strong>Classifier:</strong>{" "}
             {page.image_classifier == null
@@ -288,12 +246,34 @@ function PageCard({ page, index }: { page: PageOutput; index: number }) {
                 ? "contains visuals"
                 : "no visuals"}
           </p>
-          {page.image_text && <pre>{page.image_text}</pre>}
           <AttemptList
             title="Vision attempts"
             values={[page.image_text_1, page.image_text_2, page.image_text_3]}
           />
         </FieldBlock>
+
+        {!!embeddedImages.length && (
+          <FieldBlock title="Embedded Images" empty={false}>
+            <div className="embedded-image-list">
+              {embeddedImages.map((image) => (
+                <figure className="embedded-image-card" key={image.id}>
+                  {image.base64 && (
+                    <img
+                      src={embeddedImageSrc(image)}
+                      alt={image.alt_text ?? image.filename ?? image.id}
+                    />
+                  )}
+                  <figcaption>
+                    <strong>
+                      {image.alt_text ?? image.filename ?? image.id}
+                    </strong>
+                    {image.content_type && <span>{image.content_type}</span>}
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+          </FieldBlock>
+        )}
 
         {page.image_base64 && (
           <figure className="page-image">
@@ -304,23 +284,30 @@ function PageCard({ page, index }: { page: PageOutput; index: number }) {
           </figure>
         )}
 
-        <FieldBlock
-          title="Detailed Summary Attempts"
-          empty={
-            !page.summary_notes_1 &&
-            !page.summary_notes_2 &&
-            !page.summary_notes_3
-          }
-        >
-          <AttemptList
-            title="Summary attempts"
-            values={[
-              notesText(page.summary_notes_1),
-              notesText(page.summary_notes_2),
-              notesText(page.summary_notes_3),
-            ]}
-          />
+        <FieldBlock title="Summary Notes" empty={!page.summary_notes?.length}>
+          <ul>
+            {(page.summary_notes ?? []).map((note, i) => (
+              <li key={i}>{note}</li>
+            ))}
+          </ul>
         </FieldBlock>
+
+        <FieldBlock title="Topics" empty={!page.summary_topics?.length}>
+          <div className="topic-list">
+            {(page.summary_topics ?? []).map((topic) => (
+              <span key={topic}>{topic}</span>
+            ))}
+          </div>
+        </FieldBlock>
+
+        {hasDetailedSummaryAttempts && (
+          <FieldBlock title="Detailed Summary Attempts" empty={false}>
+            <AttemptList
+              title="Summary attempts"
+              values={detailedSummaryAttempts}
+            />
+          </FieldBlock>
+        )}
       </div>
     </details>
   );
